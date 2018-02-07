@@ -16,7 +16,8 @@
               location_type varchar, maximum_delivery_days integer,
               minimum_delivery_days integer , dedicated boolean,
               extra_fee numeric, range numeric, partially_active boolean,
-              location_latitude DOUBLE PRECISION, location_longitude DOUBLE PRECISION, distance_in_miles DOUBLE PRECISION) AS $$
+              location_latitude DOUBLE PRECISION, location_longitude DOUBLE PRECISION, distance_in_miles DOUBLE PRECISION,
+              balancing_rate_primary NUMERIC, balancing_rate_secondary NUMERIC, net_am BIGINT, net_pm BIGINT) AS $$
     DECLARE mov_date date;DECLARE mov_time varchar;DECLARE num_stairs integer;
     DECLARE mp_cubic_feet numeric;
     DECLARE mp_id integer;
@@ -266,58 +267,54 @@
         IF (SELECT count(*) FROM mp_ii WHERE wall_removal_required = TRUE) > 0 THEN
           DELETE FROM movers_with_location WHERE wall_dismounting = false;
         END IF;
-
---           JOIN (SELECT
---                   p_c.latest_pc_id as price_chart_id,
---                   p_c.id as price_chart_mover_id,
---                   mov_date AS date,
---                   COALESCE(adj.capacity_primary, rul.capacity_primary) AS capacity_primary,
---                   COALESCE(adj.capacity_secondary, rul.capacity_secondary) AS capacity_secondary,
---                   am,
---                   pm,
---                   CASE WHEN COALESCE(adj.capacity_secondary, rul.capacity_secondary) IS NULL
---                     THEN COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
---                   ELSE COALESCE(adj.capacity_secondary, rul.capacity_secondary) - COALESCE(pm, 0)
---                     END as net_pm,
---                   CASE WHEN COALESCE(adj.capacity_secondary, rul.capacity_secondary) IS NULL
---                     THEN COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
---                   ELSE COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0)
---                     END as net_am
---                 FROM mover_list as p_c
---                 LEFT JOIN(
---                    SELECT *
---                    FROM PUBLIC.daily_adjustments AS day_adj
---                    JOIN PUBLIC.daily_adjustment_data AS adj_data
---                      ON day_adj.daily_adjustment_datum_id = adj_data.id) AS adj
---                  ON mov_date  = day
---                   AND p_c.id = adj.price_chart_id
---                 LEFT JOIN(
---                    SELECT *
---                    FROM PUBLIC.daily_adjustment_rules AS rul_adj
---                    JOIN PUBLIC.daily_adjustment_data AS adj_data
---                      ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS rul
---                 ON weekday = EXTRACT(isodow FROM '12/15/17' :: DATE) - 1
---                   AND p_c.id = rul.price_chart_id
---                 LEFT JOIN(
---                   SELECT
---                     pc.mover_id,
---                     move_date,
---                     COUNT(CASE WHEN move_time NOT LIKE '%PM%' THEN move_time ELSE NULL END) AS am,
---                     COUNT(CASE WHEN move_time LIKE '%PM%' THEN move_time ELSE NULL END) AS pm
---                   FROM jobs AS jb
---                   JOIN move_plans AS mp
---                     ON mp.id = jb.move_plan_id
---                     AND mover_state IN ('new', 'accepted', 'pending')
---                     AND user_state <> 'cancelled'
---                   JOIN price_charts AS pc
---                     ON pc.id = jb.price_chart_id
---                     GROUP BY move_date, pc.mover_id) AS jobs
---                 ON p_c.id = jobs.mover_id
---                 AND mov_date = jobs.move_date) AS availability
---             ON availability.price_chart_id = mover_list.latest_pc_id
---             AND CASE WHEN mov_time = 'am' THEN availability.net_am > 0
---               ELSE availability.net_pm > 0
---               END) AS availability;
+        CREATE TEMP TABLE movers_with_location_and_balancing_rate AS (
+                 SELECT * FROM (
+                  SELECT
+                  mwl.*,
+                  COALESCE(adj.balancing_rate_primary, rul.balancing_rate_primary) AS balancing_rate_primary,
+                  COALESCE(adj.balancing_rate_secondary, rul.balancing_rate_secondary) AS balancing_rate_secondary,
+                  CASE WHEN COALESCE(adj.capacity_secondary, rul.capacity_secondary) IS NULL
+                    THEN COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+                  ELSE COALESCE(adj.capacity_secondary, rul.capacity_secondary) - COALESCE(pm, 0)
+                    END as net_pm,
+                  CASE WHEN COALESCE(adj.capacity_secondary, rul.capacity_secondary) IS NULL
+                    THEN COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+                  ELSE COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0)
+                    END as net_am
+                FROM movers_with_location as mwl
+                LEFT JOIN(
+                   SELECT *
+                   FROM PUBLIC.daily_adjustments AS day_adj
+                   JOIN PUBLIC.daily_adjustment_data AS adj_data
+                     ON day_adj.daily_adjustment_datum_id = adj_data.id) AS adj
+                 ON mov_date  = day
+                  AND mwl.price_chart_id = adj.price_chart_id
+                LEFT JOIN(
+                   SELECT *
+                   FROM PUBLIC.daily_adjustment_rules AS rul_adj
+                   JOIN PUBLIC.daily_adjustment_data AS adj_data
+                     ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS rul
+                ON weekday = EXTRACT(isodow FROM '12/15/17' :: DATE) - 1
+                  AND mwl.price_chart_id = rul.price_chart_id
+                LEFT JOIN(
+                  SELECT
+                    pc.mover_id,
+                    move_date,
+                    COUNT(CASE WHEN move_time NOT LIKE '%PM%' THEN move_time ELSE NULL END) AS am,
+                    COUNT(CASE WHEN move_time LIKE '%PM%' THEN move_time ELSE NULL END) AS pm
+                  FROM jobs AS jb
+                  JOIN move_plans AS mp
+                    ON mp.id = jb.move_plan_id
+                    AND mover_state IN ('new', 'accepted', 'pending')
+                    AND user_state <> 'cancelled'
+                  JOIN price_charts AS pc
+                    ON pc.id = jb.price_chart_id
+                    GROUP BY move_date, pc.mover_id) AS jobs
+                ON mwl.mover_id = jobs.mover_id
+                AND mov_date = jobs.move_date) AS availability
+            WHERE CASE WHEN mov_time = 'am' THEN availability.net_am > 0
+              ELSE availability.net_pm > 0
+              END);
 
 
 
@@ -369,7 +366,7 @@
 --             END
 --           );
 
-        RETURN QUERY SELECT * FROM movers_with_location;
+        RETURN QUERY SELECT * FROM movers_with_location_and_balancing_rate;
         END; $$
       LANGUAGE plpgsql;
 
