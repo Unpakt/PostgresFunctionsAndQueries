@@ -11,18 +11,22 @@
               wall_dismounting boolean, box_delivery_range numeric,
               cents_per_cubic_foot numeric, pu_lat numeric,
               pu_long numeric, latest_pc_id integer,
-               mover_earth earth, mover_location_id integer,
+              mover_earth earth, mover_location_id integer,
               price_chart_id integer, local_cents_per_cubic_foot numeric,
               location_type varchar, maximum_delivery_days integer,
               minimum_delivery_days integer , dedicated boolean,
               extra_fee numeric, range numeric, partially_active boolean,
-              location_latitude DOUBLE PRECISION, location_longitude DOUBLE PRECISION, distance_in_miles DOUBLE PRECISION,
-              balancing_rate_primary NUMERIC, balancing_rate_secondary NUMERIC, net_am BIGINT, net_pm BIGINT) AS $$
+              location_latitude DOUBLE PRECISION, location_longitude DOUBLE PRECISION,
+              distance_in_miles DOUBLE PRECISION, balancing_rate_primary NUMERIC,
+              balancing_rate_secondary NUMERIC, net_am BIGINT, net_pm BIGINT) AS $$
+    --DEFINE GENERAL VAIABLES
     DECLARE mov_date date;DECLARE mov_time varchar;DECLARE num_stairs integer;
-    DECLARE mp_cubic_feet numeric;
-    DECLARE mp_id integer;
-    DECLARE pu_state varchar;DECLARE epu_state varchar;DECLARE do_state varchar;DECLARE edo_state varchar;
-    DECLARE pu_earth earth;DECLARE epu_earth earth;DECLARE do_earth earth;DECLARE edo_earth earth;
+    DECLARE mp_cubic_feet numeric;DECLARE mp_id integer;
+    --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
+    DECLARE pu_state varchar;DECLARE epu_state varchar;
+    DECLARE do_state varchar;DECLARE edo_state varchar;
+    DECLARE pu_earth earth;DECLARE epu_earth earth;
+    DECLARE do_earth earth;DECLARE edo_earth earth;
       BEGIN
         --SET GENERAL VARIABLES
         mp_id := (SELECT uuidable_id FROM uuids WHERE uuids.uuid = $1 AND uuidable_type = 'MovePlan');
@@ -39,7 +43,7 @@
               ON addresses.height_id = heights.id
               AND addresses.move_plan_id = mp_id
               AND addresses.role_in_plan IN ('drop_off', 'pick_up') ) as stairs);
-        --FILTER BY "MOVER IS LIVE"
+        --FIND LIVE MOVERS
         DROP TABLE IF EXISTS potential_movers;
         CREATE TEMP TABLE potential_movers AS SELECT
             branch_properties.name as mover_name, movers.id, latest_pc.latest_pc_id as latest_pc_id
@@ -58,7 +62,7 @@
                 FROM public.price_charts) as latest_pc
             ON pc_mover_id = movers.id
             AND RANK = 1;
-        --GRAB MOVE PLAN INVENTORY ITEMS
+        --FIND MOVE PLAN INVENTORY ITEMS
         DROP TABLE IF EXISTS mp_ii;
         CREATE TEMP TABLE mp_ii AS SELECT move_plan_inventory_items.id as mpii_id,
                                    move_plan_id, inventory_item_id, item_group_id,
@@ -88,12 +92,13 @@
         edo_earth := (SELECT * FROM ll_to_earth(
             (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'),
             (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off')));
-        --FILTER BY HAUL TYPE AND DISTANCE
+        --FILTER BY HAUL TYPE, PICK UP DISTANCE, INTRA/INTER(STATE) CERTIFICATION, MAX CUBIC FEET, MINIMUM DISTANCE
         DROP TABLE IF EXISTS movers_by_haul;
         CREATE TEMP TABLE movers_by_haul (mover_name varchar, mover_id integer, pick_up_mileage numeric, drop_off_mileage numeric,
         extra_stop_enabled boolean, packing boolean, unpacking boolean, box_delivery boolean, piano boolean, storage boolean,
         onsites boolean, callback boolean, crating boolean, disassembly_assembly boolean, wall_dismounting boolean,
         box_delivery_range numeric, local_cents_per_cubic_foot numeric, pu_lat numeric, pu_long numeric, latest_pc_id integer, mover_earth earth);
+        --INTERSTATE MOVES
         IF (SELECT count(distinct(state)) FROM mp_addresses) > 1 THEN
             INSERT INTO movers_by_haul SELECT
               potential_movers.mover_name, potential_movers.id AS mover_id,
@@ -109,17 +114,22 @@
             FROM potential_movers
               JOIN price_charts
                 ON price_charts.id = potential_movers.latest_pc_id
+                --INTERSTATE CERTIFICATION
                 AND price_charts.us_dot IS NOT NULL
                 AND price_charts.us_dot <> ''
                 AND price_charts.usa_interstate_moves = 't'
+                --PICK UP IN RANGE
                 AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
                     ll_to_earth(price_charts.latitude, price_charts.longitude),
                     pu_earth))
+                --WITHIN MINIMUM DISTANCE
                 AND (price_charts.minimum_job_distance * 1609.34) <= (SELECT * FROM earth_distance(
                     do_earth,pu_earth))
+                --LESS THAN MAX CUBIC FEET
                 AND (price_charts.max_cubic_feet IS NULL OR mp_cubic_feet <= price_charts.max_cubic_feet)
               JOIN additional_services
                 ON additional_services.price_chart_id = price_charts.id;
+        --INTRASTATE MOVES
         ELSE
             INSERT INTO movers_by_haul SELECT
               potential_movers.mover_name, potential_movers.id AS mover_id,
@@ -135,23 +145,27 @@
             FROM potential_movers
               JOIN price_charts
                 ON price_charts.id = potential_movers.latest_pc_id
+                --INTRASTATE CERTIFICATION
                 AND price_charts.local_moves = true
                 AND (price_charts.state_authority_1_state = pu_state OR
                      price_charts.state_authority_2_state = pu_state OR
                      price_charts.state_authority_3_state = pu_state OR
                      price_charts.state_authority_4_state = pu_state )
+                --PICK UP IN RANGE
                 AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
                     ll_to_earth(price_charts.latitude, price_charts.longitude),
                     pu_earth))
+                --WITHIN MINIMUM DISTANCE
                 AND (price_charts.minimum_job_distance * 1609.34) <= (SELECT * FROM earth_distance(
                     do_earth,pu_earth))
+                --LESS THAN MAX CUBIC FEET
                 AND (price_charts.max_cubic_feet IS NULL OR mp_cubic_feet <= price_charts.max_cubic_feet)
               JOIN additional_services
                 ON additional_services.price_chart_id = price_charts.id;
         END IF;
         --FILTER BY EXTRA PICK UP
         IF (SELECT extra_pick_up_enabled FROM mp) = true THEN
-          DELETE FROM movers_by_haul WHERE (SELECT * FROM earth_distance(epu_earth,mover_earth)) > pick_up_mileage * 1609.34;
+          DELETE FROM movers_by_haul WHERE (SELECT * FROM earth_distance(epu_earth,movers_by_haul.mover_earth)) > pick_up_mileage * 1609.34;
         END IF;
         --FIND LOCAL MOVERS
         DROP TABLE IF EXISTS mover_local_locations;
@@ -167,9 +181,9 @@
             movers_by_haul.drop_off_mileage AS range,
             CAST(NULL AS BOOLEAN) as partially_active,
             movers_by_haul.pu_lat as location_latitude, movers_by_haul.pu_long as location_longitude,
-            earth_distance(ll_to_earth(movers_by_haul.pu_lat,movers_by_haul.pu_long),do_earth)/1609.34 AS distance_in_miles
+            earth_distance(movers_by_haul.mover_earth,do_earth)/1609.34 AS distance_in_miles
           FROM movers_by_haul
-          WHERE (SELECT * FROM earth_distance(ll_to_earth(movers_by_haul.pu_lat, movers_by_haul.pu_long), do_earth)) <= movers_by_haul.drop_off_mileage * 1609.34);
+          WHERE (SELECT * FROM earth_distance(movers_by_haul.mover_earth, do_earth)) <= movers_by_haul.drop_off_mileage * 1609.34);
         --FIND ALL LONG DISTANCE MOVER LOCATIONS
         DROP TABLE IF EXISTS mover_state_locations;
         CREATE TEMP TABLE mover_state_locations AS (
@@ -178,8 +192,8 @@
             mover_locations.location_type, mover_locations.maximum_delivery_days,
             mover_locations.minimum_delivery_days, mover_locations.dedicated,
             mover_locations.extra_fee, mover_locations.range, mover_locations.partially_active,
-            mover_locations.latitude as location_latitude, mover_locations.longitude as location_longitude,
-            CAST(NULL AS NUMERIC) as distance_in_miles
+            CAST(NULL AS NUMERIC) as location_latitude, CAST(NULL AS NUMERIC) AS location_longitude,
+            CAST(NULL AS NUMERIC) AS distance_in_miles
           FROM public.mover_locations
           WHERE state_code in(do_state, edo_state)
                 AND mover_locations.active = true
@@ -217,6 +231,7 @@
                 AND mover_locations.price_chart_id IN (SELECT DISTINCT mover_state_locations.price_chart_id FROM mover_state_locations WHERE mover_state_locations.partially_active = true)
                 AND mover_locations.price_chart_id NOT IN (SELECT DISTINCT mover_full_state_locations.price_chart_id FROM mover_full_state_locations)) AS closest_locations
           WHERE RANK = 1 AND closest_locations.distance_in_miles <= closest_locations.range);
+        --UNION LOCAL,STATE,CITY LOCATIONS
         DROP TABLE IF EXISTS all_mover_locations;
         CREATE TEMP TABLE all_mover_locations AS (
           SELECT * FROM mover_local_locations
@@ -228,12 +243,11 @@
         --FILTER BY EXTRA DROP OFF
         IF (SELECT extra_drop_off_enabled FROM mp) = true THEN
           DELETE FROM movers_with_location WHERE extra_stop_enabled = false;
-          DELETE FROM movers_with_location WHERE location_type = 'local' AND earth_distance(mover_earth,edo_earth)/1609.34 > drop_off_mileage;
+          DELETE FROM movers_with_location WHERE location_type = 'local' AND earth_distance(movers_with_location.mover_earth,edo_earth)/1609.34 > drop_off_mileage;
           DELETE FROM movers_with_location WHERE location_type = 'state' AND earth_distance(do_earth,edo_earth)/1609.34 > MAX(50,drop_off_mileage);
           DELETE FROM movers_with_location WHERE location_type = 'city'  AND earth_distance(ll_to_earth(location_latitude,location_longitude),edo_earth)/1609.34 > range;
         END IF;
-        --FILTER BY MINIMUM DISTANCE
-        --FILTERING BY ADDITIONAL SERVICES
+        --FILTERING BY PACKING SERVICE
         IF (SELECT follow_up_packing_service_id FROM mp) = 1 OR (SELECT initial_packing_service_id FROM mp) = 1 THEN
           DELETE FROM movers_with_location WHERE packing = false;
         END IF;
@@ -241,86 +255,102 @@
           DELETE FROM movers_with_location WHERE packing = false;
           DELETE FROM movers_with_location WHERE unpacking = false;
         END IF;
+        --FILTER BY BOX DELIVERY
         IF (SELECT box_delivery_date FROM mp) IS NOT NULL THEN
           DELETE FROM movers_with_location WHERE box_delivery = false;
-          DELETE FROM movers_with_location WHERE earth_distance(pu_earth,mover_earth) > box_delivery_range;
+          DELETE FROM movers_with_location WHERE earth_distance(pu_earth,movers_with_location.mover_earth) > box_delivery_range;
         END IF;
+        --FILTER BY PIANO
         IF (SELECT COUNT(*) FROM mp_ii WHERE requires_piano_services = TRUE) > 0 THEN
           DELETE FROM movers_with_location WHERE piano = false;
         END IF;
+        --FILTER BY STORAGE IN TRANSIT/MOVE INTO STORAGE
         IF  (SELECT COUNT(*) FROM mp_addresses WHERE role_in_plan = 'drop_off') = 0
             OR (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
           DELETE FROM movers_with_location where storage = false;
         END IF;
+        --FILTER BY PHONE REQUEST
         IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'InHomeRequest') > 0 THEN
           DELETE FROM movers_with_location WHERE onsites = false;
         END IF;
+        --FILTER BY ONSITE REQUEST
         IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'PhoneRequest') > 0 THEN
           DELETE FROM movers_with_location WHERE callback = false;
         END IF;
+        --FILTER BY CRATING
         IF (SELECT count(*) FROM mp_ii where crating_required = TRUE) > 0 THEN
           DELETE FROM movers_with_location WHERE crating = false;
         END IF;
+        --FILTER BY DISSASEMBLY/ASSEMBLY
         IF (SELECT count(*) FROM mp_ii WHERE assembly_required = TRUE) > 0 THEN
           DELETE FROM movers_with_location WHERE disassembly_assembly = false;
         END IF;
+        --FILTER BY WALL REMOVAL
         IF (SELECT count(*) FROM mp_ii WHERE wall_removal_required = TRUE) > 0 THEN
           DELETE FROM movers_with_location WHERE wall_dismounting = false;
         END IF;
+        --FILTER BY AVAILABILITY AND GET BALANCING RATE
+        DROP TABLE IF EXISTS movers_with_location_and_balancing_rate;
         CREATE TEMP TABLE movers_with_location_and_balancing_rate AS (
-                 SELECT * FROM (
-                  SELECT
-                  mwl.*,
-                  COALESCE(adj.balancing_rate_primary, rul.balancing_rate_primary) AS balancing_rate_primary,
-                  COALESCE(adj.balancing_rate_secondary, rul.balancing_rate_secondary) AS balancing_rate_secondary,
-                  CASE WHEN COALESCE(adj.capacity_secondary, rul.capacity_secondary) IS NULL
-                    THEN COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-                  ELSE COALESCE(adj.capacity_secondary, rul.capacity_secondary) - COALESCE(pm, 0)
-                    END as net_pm,
-                  CASE WHEN COALESCE(adj.capacity_secondary, rul.capacity_secondary) IS NULL
-                    THEN COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-                  ELSE COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0)
-                    END as net_am
-                FROM movers_with_location as mwl
-                LEFT JOIN(
-                   SELECT *
-                   FROM PUBLIC.daily_adjustments AS day_adj
-                   JOIN PUBLIC.daily_adjustment_data AS adj_data
-                     ON day_adj.daily_adjustment_datum_id = adj_data.id) AS adj
-                 ON mov_date  = day
-                  AND mwl.price_chart_id = adj.price_chart_id
-                LEFT JOIN(
-                   SELECT *
-                   FROM PUBLIC.daily_adjustment_rules AS rul_adj
-                   JOIN PUBLIC.daily_adjustment_data AS adj_data
-                     ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS rul
-                ON weekday = EXTRACT(isodow FROM '12/15/17' :: DATE) - 1
-                  AND mwl.price_chart_id = rul.price_chart_id
-                LEFT JOIN(
-                  SELECT
-                    pc.mover_id,
-                    move_date,
-                    COUNT(CASE WHEN move_time NOT LIKE '%PM%' THEN move_time ELSE NULL END) AS am,
-                    COUNT(CASE WHEN move_time LIKE '%PM%' THEN move_time ELSE NULL END) AS pm
-                  FROM jobs AS jb
-                  JOIN move_plans AS mp
-                    ON mp.id = jb.move_plan_id
-                    AND mover_state IN ('new', 'accepted', 'pending')
-                    AND user_state <> 'cancelled'
-                  JOIN price_charts AS pc
-                    ON pc.id = jb.price_chart_id
-                    GROUP BY move_date, pc.mover_id) AS jobs
-                ON mwl.mover_id = jobs.mover_id
-                AND mov_date = jobs.move_date) AS availability
-            WHERE CASE WHEN mov_time = 'am' THEN availability.net_am > 0
-              ELSE availability.net_pm > 0
-              END);
+          SELECT * FROM (
+            SELECT
+              mwl.*,
+              --BALANCING RATE
+              COALESCE(adj.balancing_rate_primary, rul.balancing_rate_primary) AS balancing_rate_primary,
+              COALESCE(adj.balancing_rate_secondary, rul.balancing_rate_secondary) AS balancing_rate_secondary,
+              --AVAILABILITY CALCULATIONS
+              CASE WHEN COALESCE(adj.capacity_secondary, rul.capacity_secondary) IS NULL
+                THEN COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+              ELSE COALESCE(adj.capacity_secondary, rul.capacity_secondary) - COALESCE(pm, 0)
+                END as net_pm,
+              CASE WHEN COALESCE(adj.capacity_secondary, rul.capacity_secondary) IS NULL
+                THEN COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+              ELSE COALESCE(adj.capacity_primary, rul.capacity_primary) - COALESCE(am, 0)
+                END as net_am
+            FROM movers_with_location as mwl
+            --ADJUSTMENTS BY DATE
+            LEFT JOIN(
+               SELECT *
+               FROM PUBLIC.daily_adjustments AS day_adj
+               JOIN PUBLIC.daily_adjustment_data AS adj_data
+                 ON day_adj.daily_adjustment_datum_id = adj_data.id) AS adj
+             ON mov_date  = day
+              AND mwl.price_chart_id = adj.price_chart_id
+            --ADJUSTMENTS BY WEEKDAY
+            LEFT JOIN(
+               SELECT *
+               FROM PUBLIC.daily_adjustment_rules AS rul_adj
+               JOIN PUBLIC.daily_adjustment_data AS adj_data
+                 ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS rul
+            ON weekday = EXTRACT(isodow FROM '12/15/17' :: DATE) - 1
+              AND mwl.price_chart_id = rul.price_chart_id
+            --MOVES BY MOVER ON MOVE DATE
+            LEFT JOIN(
+              SELECT
+                pc.mover_id,
+                move_date,
+                COUNT(CASE WHEN move_time NOT LIKE '%PM%' THEN move_time ELSE NULL END) AS am,
+                COUNT(CASE WHEN move_time LIKE '%PM%' THEN move_time ELSE NULL END) AS pm
+              FROM jobs AS jb
+              JOIN move_plans AS mp
+                ON mp.id = jb.move_plan_id
+                AND mover_state IN ('new', 'accepted', 'pending')
+                AND user_state <> 'cancelled'
+              JOIN price_charts AS pc
+                ON pc.id = jb.price_chart_id
+                GROUP BY move_date, pc.mover_id) AS jobs
+            ON mwl.mover_id = jobs.mover_id
+            AND mov_date = jobs.move_date) AS availability
+          WHERE CASE WHEN mov_time = 'am' THEN availability.net_am > 0
+            ELSE availability.net_pm > 0
+            END);
+      CREATE TEMP TABLE movers_and_pricing AS (
+        SELECT * FROM movers_with_location_and_balancing_rate JOIN price_charts ON movers_with_location_and_balancing_rate.latest_pc_id = price_charts.id);
 
 
 
 
-
---             latitude, longitude, cents_per_cubic_foot, cents_per_mile,
+--             cents_per_mile,
 --             cents_per_cubic_foot_of_crating, minimum_cents_per_item_crated,
 --             cents_per_truck, free_miles, cents_per_cubic_foot_per_flight_of_stairs,
 --             zip, minimum_carpentry_cost_per_hour_in_cents, special_handling_hours,
@@ -335,36 +365,6 @@
 --             box_delivery_fee_monday, box_delivery_fee_tuesday, box_delivery_fee_wednesday,
 --             box_delivery_fee_thrusday, box_delivery_fee_friday, box_delivery_fee_saturday,
 --             long_carry_fee, max_cubic_feet, packing_flat_fee
-
---           CREATE TEMP TABLE daily AS (
---             SELECT balancing_rate_primary, balancing_rate_secondary FROM  daily_adjustment_data
---             JOIN daily_adjustments
---                 ON daily_adjustments.daily_adjustment_datum_id = daily_adjustment_data.id
---                 AND daily_adjustments.day = mov_date
---                 AND price_chart_id = pc_id);
---           CREATE TEMP TABLE weekly AS (
---             SELECT balancing_rate_primary, balancing_rate_secondary FROM  daily_adjustment_data
---             JOIN daily_adjustment_rules
---                 ON daily_adjustment_rules.daily_adjustment_datum_id = daily_adjustment_data.id
---                    AND daily_adjustment_rules.weekday =  EXTRACT(isodow FROM mov_date :: DATE) - 1
---                    AND price_chart_id = pc_id);
---           has_daily := (SELECT CASE WHEN count(*) > 0 THEN true ELSE false END FROM daily);
---           bal_rate := (
---             CASE has_daily
---             WHEN true THEN
---                 CASE WHEN mov_time = 'am' THEN
---                   (SELECT balancing_rate_primary FROM daily)
---                 ELSE
---                   (SELECT COALESCE(balancing_rate_secondary, balancing_rate_primary) FROM daily)
---                 END
---             ELSE
---                 CASE WHEN mov_time = 'am' THEN
---                   (SELECT balancing_rate_primary FROM weekly)
---                 ELSE
---                   (SELECT COALESCE(balancing_rate_secondary, balancing_rate_primary) FROM weekly)
---                 END
---             END
---           );
 
         RETURN QUERY SELECT * FROM movers_with_location_and_balancing_rate;
         END; $$
