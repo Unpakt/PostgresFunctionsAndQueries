@@ -1,28 +1,30 @@
-SELECT * FROM filtered_movers_with_pricing('c3c7ff12-0b81-11e8-e3bd-19183eca35e3');
+SELECT * FROM filtered_movers_with_pricing('409f2b50-0ec0-11e8-fea2-e9c00d90dabe');
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(move_plan_param VARCHAR);
 CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR)
 RETURNS TABLE(
-          mover_name varchar, mover_id integer,
-          pick_up_mileage numeric, drop_off_mileage numeric,
-          extra_stop_enabled boolean,
-          packing boolean,unpacking boolean, box_delivery boolean,
-          piano boolean, storage boolean, onsites boolean,callback boolean,
-          crating boolean,disassembly_assembly boolean,
-          wall_dismounting boolean, box_delivery_range numeric,
-          storage_in_transit boolean, warehousing boolean,
-          cents_per_cubic_foot numeric, pu_lat numeric,
-          pu_long numeric, latest_pc_id integer,
-          mover_earth earth, mover_location_id integer,
-          price_chart_id integer, local_cents_per_cubic_foot numeric,
-          location_type varchar, maximum_delivery_days integer,
-          minimum_delivery_days integer , dedicated boolean,
-          extra_fee numeric, range numeric, partially_active boolean,
-          location_latitude DOUBLE PRECISION, location_longitude DOUBLE PRECISION,
-          distance_in_miles DOUBLE PRECISION, balancing_rate_primary NUMERIC,
-          balancing_rate_secondary NUMERIC, net_am BIGINT, net_pm BIGINT) AS $$
+  moving_cost numeric,
+  truck_cost numeric,
+  mover_name varchar, mover_id integer,
+  pick_up_mileage numeric, drop_off_mileage numeric,
+  extra_stop_enabled boolean,
+  packing boolean,unpacking boolean, box_delivery boolean,
+  piano boolean, storage boolean, onsites boolean,callback boolean,
+  crating boolean,disassembly_assembly boolean,
+  wall_dismounting boolean, box_delivery_range numeric,
+  storage_in_transit boolean, warehousing boolean,
+  local_cents_per_cubic_foot numeric, pu_lat numeric,
+  pu_long numeric, latest_pc_id integer,
+  mover_earth earth, mover_location_id integer,
+  price_chart_id integer, cents_per_cubic_foot numeric,
+  location_type varchar, maximum_delivery_days integer,
+  minimum_delivery_days integer , dedicated boolean,
+  extra_fee numeric, range numeric, partially_active boolean,
+  location_latitude DOUBLE PRECISION, location_longitude DOUBLE PRECISION,
+  distance_in_miles DOUBLE PRECISION, balancing_rate_primary NUMERIC,
+  balancing_rate_secondary NUMERIC, net_am BIGINT, net_pm BIGINT) AS $$
 --DEFINE GENERAL VARIABLES
 DECLARE mov_date date;DECLARE mov_time varchar;DECLARE num_stairs integer;
-DECLARE mp_cubic_feet numeric;DECLARE mp_id integer;
+DECLARE mp_cubic_feet numeric;DECLARE mp_id integer;DECLARE box_cubic_feet numeric;
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar;DECLARE epu_state varchar;
 DECLARE do_state varchar;DECLARE edo_state varchar;
@@ -65,15 +67,24 @@ DECLARE do_earth earth;DECLARE edo_earth earth;
         AND RANK = 1;
     --FIND MOVE PLAN INVENTORY ITEMS
     DROP TABLE IF EXISTS mp_ii;
-    CREATE TEMP TABLE mp_ii AS SELECT move_plan_inventory_items.id as mpii_id,
-                               move_plan_id, inventory_item_id, item_group_id,
-                               assembly_required, wall_removal_required, crating_required, is_user_selected, requires_piano_services,
-                              inventory_items.name as item_name, icon_css_class, cubic_feet, is_user_generated, description
-                               FROM move_plan_inventory_items
-                               JOIN inventory_items
-                                 ON move_plan_inventory_items.inventory_item_id = inventory_items.id
-                                 AND move_plan_id = mp_id;
+    CREATE TEMP TABLE mp_ii AS (
+      SELECT
+        move_plan_inventory_items.id as mpii_id,
+        move_plan_id, inventory_item_id, item_group_id,
+        assembly_required, wall_removal_required, crating_required, is_user_selected, requires_piano_services,
+        inventory_items.name as item_name, icon_css_class, cubic_feet, is_user_generated, description
+      FROM move_plan_inventory_items
+      JOIN inventory_items
+      ON move_plan_inventory_items.inventory_item_id = inventory_items.id
+      AND move_plan_id = mp_id);
     mp_cubic_feet := (SELECT SUM(cubic_feet) FROM mp_ii);
+    box_cubic_feet := (
+      SELECT SUM(bt.cubic_feet * bi.quantity)
+      FROM box_inventories AS bi
+      JOIN box_types AS bt
+      ON bi.move_plan_id = mp_id
+      AND bi.box_type_id = bt.id
+      GROUP BY bi.move_plan_id);
     --SET ADDRESS VARIABLES FOR FUTURE USE
     DROP TABLE IF EXISTS mp_addresses;
     CREATE TEMP TABLE mp_addresses AS SELECT * FROM addresses WHERE move_plan_id = mp_id;
@@ -256,11 +267,11 @@ DECLARE do_earth earth;DECLARE edo_earth earth;
     CREATE TEMP TABLE movers_with_location AS
       SELECT * FROM movers_by_haul  JOIN all_mover_locations on all_mover_locations.price_chart_id =  movers_by_haul.latest_pc_id;
     --FILTER BY EXTRA DROP OFF
-    IF (SELECT extra_drop_off_enabled FROM mp) = true THEN
-      DELETE FROM movers_with_location WHERE extra_stop_enabled = false;
-      DELETE FROM movers_with_location WHERE location_type = 'local' AND earth_distance(movers_with_location.mover_earth,edo_earth)/1609.34 > drop_off_mileage;
-      DELETE FROM movers_with_location WHERE location_type = 'state' AND earth_distance(do_earth,edo_earth)/1609.34 > MAX(50,drop_off_mileage);
-      DELETE FROM movers_with_location WHERE location_type = 'city'  AND earth_distance(ll_to_earth(location_latitude,location_longitude),edo_earth)/1609.34 > range;
+    IF (SELECT mp.extra_drop_off_enabled FROM mp) = true THEN
+      DELETE FROM movers_with_location WHERE movers_with_location.extra_stop_enabled = false;
+      DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'local' AND earth_distance(movers_with_location.mover_earth,edo_earth)/1609.34 > movers_with_location.drop_off_mileage;
+      DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'state' AND earth_distance(do_earth,edo_earth)/1609.34 > GREATEST(50.0,movers_with_location.drop_off_mileage);
+      DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'city'  AND earth_distance(ll_to_earth(movers_with_location.location_latitude,movers_with_location.location_longitude),edo_earth)/1609.34 > movers_with_location.range;
     END IF;
     --FILTERING BY PACKING SERVICE
     IF (SELECT follow_up_packing_service_id FROM mp) = 1 OR (SELECT initial_packing_service_id FROM mp) = 1 THEN
@@ -368,8 +379,45 @@ DECLARE do_earth earth;DECLARE edo_earth earth;
         ELSE availability.net_pm > 0
         END
     );
---       CREATE TEMP TABLE movers_and_pricing AS (
---         SELECT * FROM movers_with_location_and_balancing_rate JOIN price_charts ON movers_with_location_and_balancing_rate.latest_pc_id = price_charts.id);
+    DROP TABLE IF EXISTS movers_and_pricing;
+    CREATE TEMP TABLE movers_and_pricing AS (
+      SELECT
+        ((CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
+          mp_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100 * 2
+        ELSE
+          mp_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100
+        END) +
+        (CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
+          box_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100 * 2
+        ELSE
+          box_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100
+        END) +
+        (mp_cubic_feet * price_charts.cents_per_cubic_foot_per_flight_of_stairs * num_stairs / 100) +
+        (COALESCE(ihc.handling, 0))) *
+        (1 + (
+          (CASE WHEN mov_time = 'am' THEN
+            mwlabr.balancing_rate_primary
+            ELSE
+            coalesce(mwlabr.balancing_rate_secondary, mwlabr.balancing_rate_primary)
+            END
+          ) / 100)) AS moving_cost,
+        CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
+          Cast(price_charts.cents_per_truck / 100 * 2 as numeric)
+        ELSE
+          Cast(price_charts.cents_per_truck / 100 as numeric)
+        END as truck_cost,
+        mwlabr.*
+      FROM movers_with_location_and_balancing_rate AS mwlabr
+      JOIN price_charts
+      ON mwlabr.latest_pc_id = price_charts.id
+      LEFT JOIN (
+        SELECT ihc.price_chart_id AS ihc_pc, sum(cost) AS handling
+        FROM mp_ii
+        JOIN item_handling_charges as ihc
+        ON mp_ii.inventory_item_id = ihc.item_id
+        AND ihc.price_chart_id IN (SELECT DISTINCT movers_with_location_and_balancing_rate.price_chart_id FROM movers_with_location_and_balancing_rate)
+        GROUP BY ihc_pc) AS ihc
+      ON ihc_pc = mwlabr.latest_pc_id);
 
 
 
@@ -390,7 +438,6 @@ DECLARE do_earth earth;DECLARE edo_earth earth;
 --             box_delivery_fee_thrusday, box_delivery_fee_friday, box_delivery_fee_saturday,
 --             long_carry_fee, max_cubic_feet, packing_flat_fee
 
-    RETURN QUERY SELECT * FROM movers_with_location_and_balancing_rate;
+    RETURN QUERY SELECT * FROM movers_and_pricing;
     END; $$
   LANGUAGE plpgsql;
-
