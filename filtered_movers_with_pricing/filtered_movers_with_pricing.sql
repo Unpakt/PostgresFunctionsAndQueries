@@ -1,4 +1,27 @@
 SELECT * FROM filtered_movers_with_pricing('409f2b50-0ec0-11e8-fea2-e9c00d90dabe');
+
+DROP FUNCTION distance_in_miles(VARCHAR, VARCHAR);
+CREATE FUNCTION distance_in_miles(addr1 VARCHAR, addr2 VARCHAR)
+  RETURNS numeric AS
+$func$
+BEGIN
+RETURN (SELECT distance_in_miles
+        FROM driving_distances
+        WHERE key = (
+          SELECT string_agg(key, '::' order by key)
+          FROM (
+                 SELECT
+                   CAST(addr1 AS varchar) AS key,
+                   1 AS id
+                 UNION (SELECT
+                   CAST(addr2 AS varchar) as key,
+                   1 as id
+                 )) AS keys
+          GROUP BY id)
+        LIMIT 1);
+END
+$func$ LANGUAGE plpgsql;
+
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(move_plan_param VARCHAR);
 CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR)
 RETURNS TABLE(
@@ -26,10 +49,11 @@ RETURNS TABLE(
 DECLARE mov_date date;DECLARE mov_time varchar;DECLARE num_stairs integer;
 DECLARE mp_cubic_feet numeric;DECLARE mp_id integer;DECLARE box_cubic_feet numeric;
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
-DECLARE pu_state varchar;DECLARE epu_state varchar;
-DECLARE do_state varchar;DECLARE edo_state varchar;
-DECLARE pu_earth earth;DECLARE epu_earth earth;
-DECLARE do_earth earth;DECLARE edo_earth earth;
+DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
+DECLARE epu_state varchar;DECLARE epu_earth earth;DECLARE epu_key varchar;
+DECLARE do_state varchar; DECLARE do_earth earth; DECLARE do_key varchar;
+DECLARE edo_state varchar;DECLARE edo_earth earth;DECLARE edo_key varchar;
+DECLARE
   BEGIN
     --SET GENERAL VARIABLES
     mp_id := (SELECT uuidable_id FROM uuids WHERE uuids.uuid = $1 AND uuidable_type = 'MovePlan');
@@ -85,12 +109,18 @@ DECLARE do_earth earth;DECLARE edo_earth earth;
       ON bi.move_plan_id = mp_id
       AND bi.box_type_id = bt.id
       GROUP BY bi.move_plan_id);
-    --SET ADDRESS VARIABLES FOR FUTURE USE
+    --SET ADDRESS VARIABLES USING THIS STUPID METHOD BECAUSE THE RAILS DEVELOPERS CAN'T READ THE POSTGRES DOCUMENTATION
+    --https://www.postgresql.org/docs/current/static/sql-select.html Description #8
     DROP TABLE IF EXISTS mp_addresses;
-    CREATE TEMP TABLE mp_addresses AS SELECT * FROM addresses WHERE move_plan_id = mp_id;
+    CREATE TEMP TABLE mp_addresses AS
+      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'pick_up' LIMIT 1) UNION
+      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_pick_up' LIMIT 1) UNION
+      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'drop_off' LIMIT 1) UNION
+      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_drop_off' LIMIT 1);;
     --HANDLE WAREHOSUE DESTINATIONS
     IF (SELECT warehouse_destination FROM mp) = TRUE THEN
       DELETE FROM mp_addresses WHERE role_in_plan = 'drop_off';
+      DELETE FROM mp_addresses WHERE role_in_plan = 'extra_drop_off';
     END IF;
     pu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'pick_up');
     epu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
@@ -108,6 +138,30 @@ DECLARE do_earth earth;DECLARE edo_earth earth;
     edo_earth := (SELECT * FROM ll_to_earth(
         (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'),
         (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off')));
+    pu_key := (SELECT
+                 CASE WHEN street_address is null OR street_address = '' THEN
+                  city || ', ' || state || ', '|| zip
+                ELSE
+                  '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
+                END  FROM mp_addresses WHERE role_in_plan = 'pick_up');
+    epu_key := (SELECT
+                 CASE WHEN street_address is null OR street_address = '' THEN
+                  city || ', ' || state || ', '|| zip
+                ELSE
+                  '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
+                END  FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
+    do_key := (SELECT
+                 CASE WHEN street_address is null OR street_address = '' THEN
+                  city || ', ' || state || ', '|| zip
+                ELSE
+                  '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
+                END  FROM mp_addresses WHERE role_in_plan = 'drop_off');
+    edo_key := (SELECT
+                 CASE WHEN street_address is null OR street_address = '' THEN
+                  city || ', ' || state || ', '|| zip
+                ELSE
+                  '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
+                END  FROM mp_addresses WHERE role_in_plan = 'extra_drop_off');
     --FILTER BY HAUL TYPE, PICK UP DISTANCE, INTRA/INTER(STATE) CERTIFICATION, MAX CUBIC FEET, MINIMUM DISTANCE
     DROP TABLE IF EXISTS movers_by_haul;
     CREATE TEMP TABLE movers_by_haul (mover_name varchar, mover_id integer, pick_up_mileage numeric, drop_off_mileage numeric,
@@ -376,36 +430,125 @@ DECLARE do_earth earth;DECLARE edo_earth earth;
         ON mwl.mover_id = jobs.mover_id
         AND mov_date = jobs.move_date) AS availability
       WHERE CASE WHEN mov_time = 'am' THEN availability.net_am > 0
-        ELSE availability.net_pm > 0
+        ELSE availability.net_pm > 011111110
         END
     );
     DROP TABLE IF EXISTS movers_and_pricing;
     CREATE TEMP TABLE movers_and_pricing AS (
+--TOTAL
+  --SUBTOTAL
+    --SUM BEFORE ADJUSTMENT
+      --MOVING COST ADJUSTED
+        --ITEM COST
       SELECT
         ((CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
           mp_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100 * 2
         ELSE
           mp_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100
         END) +
+        --BOX COST
         (CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
           box_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100 * 2
         ELSE
           box_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100
         END) +
+        --HEIGHT COST
         (mp_cubic_feet * price_charts.cents_per_cubic_foot_per_flight_of_stairs * num_stairs / 100) +
+        --HANDLING COST
         (COALESCE(ihc.handling, 0))) *
+        --MULTIPLY ABOVE BY BALANCING RATE
         (1 + (
           (CASE WHEN mov_time = 'am' THEN
             mwlabr.balancing_rate_primary
             ELSE
             coalesce(mwlabr.balancing_rate_secondary, mwlabr.balancing_rate_primary)
             END
-          ) / 100)) AS moving_cost,
-        CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
+          ) / 100)) AS moving_cost_adjusted,
+      --TRAVEL COST ADJUSTED
+        --TRUCK COST
+        (CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
           Cast(price_charts.cents_per_truck / 100 * 2 as numeric)
         ELSE
           Cast(price_charts.cents_per_truck / 100 as numeric)
-        END as truck_cost,
+        END) +
+        --DISTANCE COST ADJUSTED
+          --WAREHOUSE TO PICK UP DISTANCE
+        ((SELECT * FROM distance_in_miles(pu_key,price_charts.zip)) +
+          --HANDLE LOCAL
+        (CASE WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NULL THEN
+            --HANDLE EXTRA PICK UP
+          (CASE WHEN epu_state IS NOT NULL THEN
+              --PICK UP TO EXTRA PICK UP DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,epu_key)) +
+              --EXTRA PICK UP TO DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(epu_key,do_key))
+          ELSE
+              --PICK UP TO DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,do_key))
+          END) +
+            --HANDLE EXTRA DROP OFF
+          (CASE WHEN edo_state IS NOT NULL THEN
+              --DROP OFF TO EXTRA DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(do_key,edo_key)) +
+              --EXTRA DROP OFF TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.zip))
+          ELSE
+              --DROP OFF TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(do_key,price_charts.zip))
+          END)
+          --HANDLE LOCAL SIT
+        WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+            --HANDLE EXTRA PICK UP
+          (CASE WHEN epu_state IS NOT NULL THEN
+              --PICK UP TO EXTRA PICK UP DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,epu_key))+
+              --EXTRA PICK UP TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(epu_key,price_charts.zip))
+          ELSE --PICK UP TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,price_charts.zip))
+          END)+
+            --HANDLE EXTRA DROP OFF
+          (CASE WHEN edo_state IS NOT NULL THEN
+              --WAREHOUSE TO DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(price_charts.zip,do_key)) +
+              --DROP OFF TO EXTRA DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(do_key,edo_key)) +
+              --EXTRA DROP OFF TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.zip))
+          ELSE
+              --DROP OFF TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(do_key,price_charts.zip)) * 2
+          END)
+          --HANDLE LONG DISTANCE AND MOVE INTO STORAGE
+        ELSE
+          (CASE WHEN epu_state IS NOT NULL THEN
+              --PICK UP TO EXTRA PICK UP DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,epu_key))+
+              --EXTRA PICK UP TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(epu_key,price_charts.zip))
+          ELSE
+              --PICK UP TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,price_charts.zip))
+          END)
+        END)) - price_charts.free_miles ,
+
+          --PICK UP TO EXTRA PICK UP
+          --CONDITIONAL
+        --EXTRA STOPS COST ADJUSTED
+      --SPECIAL HANGLING COST ADJUSTED
+      --STORAGE COST ADJUSTED
+      --PACKING COST ADJUSTED
+      --CARDBOARD COST ADJUSTED
+      --SURCHARGE CUBIC FEET COST ADJUSTED
+      --COI CHARGES COST ADJUSTED
+      --SIZE SURCHARGE COST ADJUSTED
+    --ADMIN ADJUSTMENT BEFORE DISCOUNT
+  --ALL DISCOUNTS
+    --MOVER SPECIAL DISCOUNT
+    --FACEBOOK DISCOUNT
+    --TWITTER DISCOUNT
+    --COUPON DISCOUNT
+  --ADMIN ADJUSTMENT AFTER DISCOUNT
         mwlabr.*
       FROM movers_with_location_and_balancing_rate AS mwlabr
       JOIN price_charts
