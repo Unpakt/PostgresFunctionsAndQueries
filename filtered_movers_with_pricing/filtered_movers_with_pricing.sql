@@ -1,6 +1,7 @@
 SELECT * FROM filtered_movers_with_pricing('409f2b50-0ec0-11e8-fea2-e9c00d90dabe');
+SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 
-DROP FUNCTION distance_in_miles(VARCHAR, VARCHAR);
+DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(addr1 VARCHAR, addr2 VARCHAR)
   RETURNS numeric AS
 $func$
@@ -25,8 +26,9 @@ $func$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(move_plan_param VARCHAR);
 CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR)
 RETURNS TABLE(
-  moving_cost numeric,
-  truck_cost numeric,
+  moving_cost_adjusted numeric,
+  truck_cost_adjusted numeric,
+  travel_cost_adjusted numeric,
   mover_name varchar, mover_id integer,
   pick_up_mileage numeric, drop_off_mileage numeric,
   extra_stop_enabled boolean,
@@ -116,7 +118,7 @@ DECLARE
       (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'pick_up' LIMIT 1) UNION
       (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_pick_up' LIMIT 1) UNION
       (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'drop_off' LIMIT 1) UNION
-      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_drop_off' LIMIT 1);;
+      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_drop_off' LIMIT 1);
     --HANDLE WAREHOSUE DESTINATIONS
     IF (SELECT warehouse_destination FROM mp) = TRUE THEN
       DELETE FROM mp_addresses WHERE role_in_plan = 'drop_off';
@@ -430,8 +432,79 @@ DECLARE
         ON mwl.mover_id = jobs.mover_id
         AND mov_date = jobs.move_date) AS availability
       WHERE CASE WHEN mov_time = 'am' THEN availability.net_am > 0
-        ELSE availability.net_pm > 011111110
+        ELSE availability.net_pm > 0
         END
+    );
+    DROP TABLE IF EXISTS travel_plan_miles;
+    CREATE TEMP TABLE travel_plan_miles AS (SELECT
+        mwlabr.latest_pc_id,
+        --WAREHOUSE TO PICK UP DISTANCE
+      ((SELECT * FROM distance_in_miles(pu_key,price_charts.zip)) +
+          --HANDLE LOCAL
+        (CASE WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NULL THEN
+            --HANDLE EXTRA PICK UP
+          (CASE WHEN epu_state IS NOT NULL THEN
+              --PICK UP TO EXTRA PICK UP DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,epu_key)) +
+              --EXTRA PICK UP TO DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(epu_key,do_key))
+          ELSE
+              --PICK UP TO DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,do_key))
+          END) +
+            --HANDLE EXTRA DROP OFF
+          (CASE WHEN edo_state IS NOT NULL THEN
+              --DROP OFF TO EXTRA DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(do_key,edo_key)) +
+              --EXTRA DROP OFF TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.zip))
+          ELSE
+              --DROP OFF TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(do_key,price_charts.zip))
+          END)
+          --HANDLE LOCAL SIT
+        WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+            --HANDLE EXTRA PICK UP
+          (CASE WHEN epu_state IS NOT NULL THEN
+              --PICK UP TO EXTRA PICK UP DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,epu_key))+
+              --EXTRA PICK UP TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(epu_key,price_charts.zip))
+          ELSE
+              --PICK UP TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,price_charts.zip))
+          END) +
+            --HANDLE EXTRA DROP OFF
+          (CASE WHEN edo_state IS NOT NULL THEN
+              --WAREHOUSE TO DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(price_charts.zip,do_key)) +
+              --DROP OFF TO EXTRA DROP OFF DISTANCE
+            (SELECT * FROM distance_in_miles(do_key,edo_key)) +
+              --EXTRA DROP OFF TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.zip))
+          ELSE
+              --DROP OFF TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(do_key,price_charts.zip)) * 2
+          END)
+          --SUBTRACT EXTRA FREE MILES FOR LOCAL SIT
+          - price_charts.free_miles
+          --HANDLE LONG DISTANCE AND MOVE INTO STORAGE
+        ELSE
+          (CASE WHEN epu_state IS NOT NULL THEN
+              --PICK UP TO EXTRA PICK UP DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,epu_key))+
+              --EXTRA PICK UP TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(epu_key,price_charts.zip))
+          ELSE
+              --PICK UP TO WAREHOUSE DISTANCE
+            (SELECT * FROM distance_in_miles(pu_key,price_charts.zip))
+          END)
+        END)
+        --SUBTRACT FREE MILES FOR ALL MOVES
+        - price_charts.free_miles) AS distance_minus_free
+       FROM movers_with_location_and_balancing_rate AS mwlabr
+        JOIN price_charts
+        ON mwlabr.latest_pc_id = price_charts.id
     );
     DROP TABLE IF EXISTS movers_and_pricing;
     CREATE TEMP TABLE movers_and_pricing AS (
@@ -470,67 +543,14 @@ DECLARE
           Cast(price_charts.cents_per_truck / 100 * 2 as numeric)
         ELSE
           Cast(price_charts.cents_per_truck / 100 as numeric)
-        END) +
-        --DISTANCE COST ADJUSTED
-          --WAREHOUSE TO PICK UP DISTANCE
-        ((SELECT * FROM distance_in_miles(pu_key,price_charts.zip)) +
-          --HANDLE LOCAL
-        (CASE WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NULL THEN
-            --HANDLE EXTRA PICK UP
-          (CASE WHEN epu_state IS NOT NULL THEN
-              --PICK UP TO EXTRA PICK UP DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,epu_key)) +
-              --EXTRA PICK UP TO DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,do_key))
-          ELSE
-              --PICK UP TO DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,do_key))
-          END) +
-            --HANDLE EXTRA DROP OFF
-          (CASE WHEN edo_state IS NOT NULL THEN
-              --DROP OFF TO EXTRA DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,edo_key)) +
-              --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(edo_key,price_charts.zip))
-          ELSE
-              --DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,price_charts.zip))
-          END)
-          --HANDLE LOCAL SIT
-        WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
-            --HANDLE EXTRA PICK UP
-          (CASE WHEN epu_state IS NOT NULL THEN
-              --PICK UP TO EXTRA PICK UP DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,epu_key))+
-              --EXTRA PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,price_charts.zip))
-          ELSE --PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,price_charts.zip))
-          END)+
-            --HANDLE EXTRA DROP OFF
-          (CASE WHEN edo_state IS NOT NULL THEN
-              --WAREHOUSE TO DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(price_charts.zip,do_key)) +
-              --DROP OFF TO EXTRA DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,edo_key)) +
-              --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(edo_key,price_charts.zip))
-          ELSE
-              --DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,price_charts.zip)) * 2
-          END)
-          --HANDLE LONG DISTANCE AND MOVE INTO STORAGE
+        END) AS truck_cost_adjusted,
+        CASE WHEN travel_plan_miles.distance_minus_free < 0 THEN
+          0.00
         ELSE
-          (CASE WHEN epu_state IS NOT NULL THEN
-              --PICK UP TO EXTRA PICK UP DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,epu_key))+
-              --EXTRA PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,price_charts.zip))
-          ELSE
-              --PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,price_charts.zip))
-          END)
-        END)) - price_charts.free_miles ,
+          travel_plan_miles.distance_minus_free * price_charts.cents_per_mile / 100
+        END
+        --DISTANCE COST ADJUSTED
+         AS travel_cost_adjusted,
 
           --PICK UP TO EXTRA PICK UP
           --CONDITIONAL
@@ -553,6 +573,7 @@ DECLARE
       FROM movers_with_location_and_balancing_rate AS mwlabr
       JOIN price_charts
       ON mwlabr.latest_pc_id = price_charts.id
+      JOIN travel_plan_miles ON mwlabr.latest_pc_id = travel_plan_miles.latest_pc_id
       LEFT JOIN (
         SELECT ihc.price_chart_id AS ihc_pc, sum(cost) AS handling
         FROM mp_ii
