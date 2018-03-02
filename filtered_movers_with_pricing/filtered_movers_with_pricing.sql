@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('f93e62dc-1d72-11e8-94b4-c76ccf169b86');
+SELECT * FROM filtered_movers_with_pricing('a0f7950a-1d7f-11e8-95b4-c76ccf169b86');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
@@ -103,14 +103,21 @@ DECLARE
       JOIN inventory_items
       ON move_plan_inventory_items.inventory_item_id = inventory_items.id
       AND move_plan_id = mp_id);
+    DROP TABLE IF EXISTS mp_bi;
+    CREATE TEMP TABLE mp_bi AS (
+      SELECT
+        mpbi.id as mpbi_id,
+        move_plan_id, box_type_id, quantity,
+        cubic_feet
+      FROM box_inventories as mpbi
+      JOIN box_types AS bt
+      ON mpbi.move_plan_id = mp_id
+      AND mpbi.box_type_id = bt.id);
     item_cubic_feet := (SELECT SUM(cubic_feet) FROM mp_ii);
     box_cubic_feet := (
-      SELECT SUM(bt.cubic_feet * bi.quantity)
-      FROM box_inventories AS bi
-      JOIN box_types AS bt
-      ON bi.move_plan_id = mp_id
-      AND bi.box_type_id = bt.id
-      GROUP BY bi.move_plan_id);
+      SELECT SUM(cubic_feet * quantity)
+      FROM mp_bi
+      GROUP BY mp_bi.move_plan_id);
     total_cubic_feet := box_cubic_feet + item_cubic_feet;
     --SET ADDRESS VARIABLES USING THIS STUPID METHOD BECAUSE THE RAILS DEVELOPERS CAN'T READ THE POSTGRES DOCUMENTATION
     --https://www.postgresql.org/docs/current/static/sql-select.html Description #8
@@ -141,27 +148,29 @@ DECLARE
     edo_earth := (SELECT * FROM ll_to_earth(
         (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'),
         (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off')));
-    pu_key := (SELECT
-                 CASE WHEN street_address is null OR street_address = '' THEN
+    pu_key :=   (SELECT
+                CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
                 ELSE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
                 END  FROM mp_addresses WHERE role_in_plan = 'pick_up');
-    epu_key := (SELECT
-                 CASE WHEN street_address is null OR street_address = '' THEN
+    epu_key :=  (SELECT
+                CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
                 ELSE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
                 END  FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
-    do_key := (SELECT
-                 CASE WHEN street_address is null OR street_address = '' THEN
+    do_key :=   (SELECT
+                CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
                 ELSE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
                 END  FROM mp_addresses WHERE role_in_plan = 'drop_off');
     edo_key := (SELECT
-                 CASE WHEN street_address is null OR street_address = '' THEN
+                CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
+                WHEN street_address is null OR street_address = '' AND zip IS NULL THEN
+                  city || ', ' || state
                 ELSE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
                 END  FROM mp_addresses WHERE role_in_plan = 'extra_drop_off');
@@ -347,18 +356,13 @@ DECLARE
     IF (SELECT COUNT(*) FROM mp_ii WHERE requires_piano_services = TRUE) > 0 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.piano = false;
     END IF;
-    --FILTER BY STORAGE IN TRANSIT/MOVE INTO STORAGE
-    IF (SELECT COUNT(*) FROM mp_addresses WHERE role_in_plan = 'drop_off') = 0
-    OR (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
-      DELETE FROM movers_with_location where movers_with_location.storage = false;
---UNCOMMENT AFTER 2.44.7 DEPLOY!!--UNCOMMENT AFTER 2.44.7 DEPLOY!!--UNCOMMENT AFTER 2.44.7 DEPLOY!!
---       IF (SELECT COUNT(*) FROM mp_addresses WHERE role_in_plan = 'drop_off') = 0 THEN
---         DELETE FROM movers_with_location WHERE movers_with_location.warehousing = false;
---       END IF;
---       IF (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
---         DELETE FROM movers_with_location WHERE movers_with_location.storage_in_transit = false;
---       END IF;
---UNCOMMENT AFTER 2.44.7 DEPLOY!!--UNCOMMENT AFTER 2.44.7 DEPLOY!!--UNCOMMENT AFTER 2.44.7 DEPLOY!!
+    --FILTER BY MIS
+    IF (SELECT COUNT(*) FROM mp_addresses WHERE role_in_plan = 'drop_off') = 0 THEN
+      DELETE FROM movers_with_location WHERE movers_with_location.warehousing = false;
+    END IF;
+    --FILTER BY SIT
+    IF (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+      DELETE FROM movers_with_location WHERE movers_with_location.storage_in_transit = false;
     END IF;
     --FILTER BY PHONE REQUEST
     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'InHomeRequest') > 0 THEN
@@ -413,7 +417,12 @@ DECLARE
            FROM PUBLIC.daily_adjustment_rules AS rul_adj
            JOIN PUBLIC.daily_adjustment_data AS adj_data
              ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS weekly
-        ON weekday = EXTRACT(isodow FROM mov_date :: DATE)
+        ON weekday =
+           CASE WHEN EXTRACT(isodow FROM mov_date :: DATE) = 7 THEN
+              0
+            ELSE
+              EXTRACT(isodow FROM mov_date :: DATE)
+            END
         AND mwl.price_chart_id = weekly.price_chart_id
         --MOVES BY MOVER ON MOVE DATE
         LEFT JOIN(
@@ -430,7 +439,7 @@ DECLARE
           JOIN price_charts AS pc
             ON pc.id = jb.price_chart_id
             GROUP BY move_date, pc.mover_id) AS jobs
-        ON mwl.mover_id = jobs.mover_id
+          ON mwl.mover_id = jobs.mover_id
         AND mov_date = jobs.move_date) AS availability
       WHERE CASE WHEN mov_time = 'am' THEN availability.net_am > 0
         ELSE availability.net_pm > 0
@@ -515,7 +524,7 @@ DECLARE
       --MOVING COST ADJUSTED
         --ITEM COST
       SELECT
-        ((CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
+        ROUND(((CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
           item_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100 * 2
         ELSE
           item_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100
@@ -528,8 +537,10 @@ DECLARE
         END) +
         --HEIGHT COST
         (total_cubic_feet * price_charts.cents_per_cubic_foot_per_flight_of_stairs * num_stairs / 100) +
-        --HANDLING COST
-        (COALESCE(ihc.handling, 0))) *
+        --ITEM HANDLING COST
+        (COALESCE(ihc.item_handling, 0)) +
+        --BOX HANDLING COST
+        (COALESCE(bhc.box_handling, 0))) *
         --MULTIPLY ABOVE BY BALANCING RATE
         (1 + (
           (CASE WHEN mov_time = 'am' THEN
@@ -537,10 +548,10 @@ DECLARE
             ELSE
             coalesce(mwlabr.balancing_rate_secondary, mwlabr.balancing_rate_primary)
             END
-          ) / 100)) AS moving_cost_adjusted,
+          ) / 100)),2) AS moving_cost_adjusted,
       --TRAVEL COST ADJUSTED
         --TRUCK COST
-        ((CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
+        ROUND(((CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
           Cast(price_charts.cents_per_truck / 100 * 2 as numeric)
         ELSE
           Cast(price_charts.cents_per_truck / 100 as numeric)
@@ -570,7 +581,7 @@ DECLARE
             ELSE
             coalesce(mwlabr.balancing_rate_secondary, mwlabr.balancing_rate_primary)
             END
-          ) / 100))
+          ) / 100)), 2)
          AS travel_cost_adjusted,
 
           --PICK UP TO EXTRA PICK UP
@@ -596,13 +607,23 @@ DECLARE
       ON mwlabr.latest_pc_id = price_charts.id
       JOIN travel_plan_miles ON mwlabr.latest_pc_id = travel_plan_miles.latest_pc_id
       LEFT JOIN (
-        SELECT ihc.price_chart_id AS ihc_pc, sum(cost) AS handling
+        SELECT ihc.price_chart_id AS ihc_pc, sum(cost) AS item_handling
         FROM mp_ii
         JOIN item_handling_charges as ihc
         ON mp_ii.inventory_item_id = ihc.item_id
+        AND ihc.item_type = 'InventoryItem'
         AND ihc.price_chart_id IN (SELECT DISTINCT movers_with_location_and_balancing_rate.price_chart_id FROM movers_with_location_and_balancing_rate)
         GROUP BY ihc_pc) AS ihc
       ON ihc_pc = mwlabr.latest_pc_id
+      LEFT JOIN (
+        SELECT bhc.price_chart_id AS bhc_pc, sum(cost * quantity) AS box_handling
+        FROM mp_bi
+        JOIN item_handling_charges as bhc
+        ON mp_bi.box_type_id = bhc.item_id
+        AND bhc.item_type = 'BoxType'
+        AND bhc.price_chart_id IN (SELECT DISTINCT movers_with_location_and_balancing_rate.price_chart_id FROM movers_with_location_and_balancing_rate)
+        GROUP BY bhc_pc) AS bhc
+      ON bhc_pc = mwlabr.latest_pc_id
       LEFT JOIN (
         SELECT (
            SUM (rate_part) + 100)/100 AS long_distance_tiers_coeffienct,
@@ -640,6 +661,6 @@ DECLARE
 --             box_delivery_fee_thrusday, box_delivery_fee_friday, box_delivery_fee_saturday,
 --             long_carry_fee, max_cubic_feet, packing_flat_fee
 
-    RETURN QUERY SELECT * FROM movers_and_pricing;
+    RETURN QUERY SELECT * FROM movers_and_pricing ORDER BY (movers_and_pricing.moving_cost_adjusted + movers_and_pricing.travel_cost_adjusted) ASC ;
     END; $$
   LANGUAGE plpgsql;
