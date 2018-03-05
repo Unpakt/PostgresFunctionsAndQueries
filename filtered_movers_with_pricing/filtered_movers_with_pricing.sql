@@ -543,6 +543,31 @@ DECLARE
     JOIN price_charts AS crating_pc
     ON crating_pc.id IN (SELECT crating_mwlabr.latest_pc_id FROM movers_with_location_and_balancing_rate AS crating_mwlabr)
     GROUP BY crating_pc_id);
+    --CARDBOARD/PACKING/UNPACKING COST BY PRICE_CHART
+    DROP TABLE IF EXISTS cb_p_up_cost_pc;
+    CREATE TEMP TABLE cb_p_up_cost_pc AS (SELECT
+      SUM(cents_for_cardboard/100 * quantity) AS cardboard_cost,
+      CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 1
+                OR (SELECT initial_packing_service_id FROM mp) = 1
+                OR (SELECT follow_up_packing_service_id FROM mp) = 2
+                OR (SELECT initial_packing_service_id FROM mp) = 2
+                THEN SUM(cents_for_packing/100 * quantity)
+      ELSE
+        0
+      END AS packing_cost,
+      CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 2
+                OR (SELECT initial_packing_service_id FROM mp) = 2
+                THEN SUM(cents_for_unpacking/100 * quantity)
+      ELSE
+        0
+      END AS unpacking_cost,
+      cb_p_up_pc.id AS cb_p_up_pc_id
+    FROM mp_bi
+    JOIN price_charts AS cb_p_up_pc
+    ON cb_p_up_pc.id IN (SELECT cb_p_up_mwlabr.latest_pc_id FROM movers_with_location_and_balancing_rate AS cb_p_up_mwlabr)
+    JOIN box_type_rates AS btr
+    ON cb_p_up_pc.id = btr.price_chart_id AND btr.box_type_id = mp_bi.box_type_id
+    GROUP BY cb_p_up_pc);
     --DO ALL THE PRICING STUFF (oh boi)
     DROP TABLE IF EXISTS movers_and_pricing;
     CREATE TEMP TABLE movers_and_pricing AS (
@@ -616,6 +641,22 @@ DECLARE
         END
         ))* balancing_rate.rate AS special_handling_cost_adjusted,
       --STORAGE COST ADJUSTED
+        CASE WHEN do_state IS NULL OR (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+          --CALCULATE MULTIPLIER
+          (CASE WHEN do_state IS NULL AND (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+            1.0
+          WHEN DATE_PART('day', CAST(mp.storage_move_out_date AS timestamp) - CAST(mp.move_date AS timestamp)) <= 14 THEN
+            0.5
+          WHEN DATE_PART('day', CAST(mp.storage_move_out_date AS timestamp) - CAST(mp.move_date AS timestamp)) <= 31 THEN
+            1.0
+          ELSE
+            1.5
+          END) *
+          --CALCULATE CUBIC FEET COST
+          (price_charts.storage_fee / 100 * total_cubic_feet)
+        ELSE
+          0
+        END AS storage_cost,
       --PACKING COST ADJUSTED
       --CARDBOARD COST ADJUSTED
       --SURCHARGE CUBIC FEET COST ADJUSTED
