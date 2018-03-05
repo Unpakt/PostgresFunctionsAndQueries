@@ -54,7 +54,7 @@ RETURNS TABLE(
 DECLARE mov_date date;DECLARE mov_time varchar;DECLARE num_stairs integer;
 DECLARE mp_id integer;DECLARE item_cubic_feet numeric;DECLARE box_cubic_feet numeric;
 DECLARE total_cubic_feet numeric;DECLARE num_carpentry integer;DECLARE num_crating integer;
-DECLARE box_delivery_dow integer;
+DECLARE box_dow integer;DECLARE box_date date;
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
 DECLARE epu_state varchar;DECLARE epu_earth earth;DECLARE epu_key varchar;
@@ -68,7 +68,8 @@ DECLARE
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     mov_date := (SELECT move_date FROM mp);
     mov_time :=(SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp );
-    box_delivery_dow :=  (SELECT EXTRACT(isodow FROM mov_date :: DATE));
+    box_date := (SELECT box_delivery_date FROM mp);
+    box_dow := (SELECT EXTRACT(isodow FROM box_date :: DATE));
     num_stairs := (
       SELECT sum(flights_of_stairs) FROM (
         SELECT
@@ -539,7 +540,7 @@ DECLARE
     DROP TABLE IF EXISTS crating_cost_pc;
     CREATE TEMP TABLE crating_cost_pc AS (SELECT
       (CASE WHEN num_crating > 0 THEN
-        SUM(GREATEST((cicf.cubic_feet * crating_pc.cents_per_cubic_foot_of_crating / 100),(crating_pc.minimum_cents_per_item_crated / 100)))
+        SUM(GREATEST((cicf.cubic_feet * crating_pc.cents_per_cubic_foot_of_crating / 100.00),(crating_pc.minimum_cents_per_item_crated / 100.00)))
       ELSE
         0
       END) AS crating_cost,
@@ -551,10 +552,10 @@ DECLARE
     --CARDBOARD/PACKING/UNPACKING COST BY PRICE_CHART
     DROP TABLE IF EXISTS cb_p_up_cost_pc;
     CREATE TEMP TABLE cb_p_up_cost_pc AS (SELECT
-      CASE WHEN box_delivery_dow IS NOT NULL THEN
-        SUM(cents_for_cardboard/100 * quantity) +
+      CASE WHEN (SELECT mp.box_delivery_date FROM MP) IS NOT NULL THEN
+        SUM(cents_for_cardboard/100.00 * CAST(quantity AS NUMERIC)) +
         --FIGURE OUT REDICULOUS BOX_DELIVERY_FEE (WHAT ARE THESE PATTERNS???????)
-        (CASE box_delivery_dow
+        (CASE box_dow
           WHEN 1 THEN cb_p_up_pc.box_delivery_fee_monday
           WHEN 2 THEN cb_p_up_pc.box_delivery_fee_thursday
           WHEN 3 THEN cb_p_up_pc.box_delivery_fee_wednesday
@@ -563,29 +564,54 @@ DECLARE
           WHEN 6 THEN cb_p_up_pc.box_delivery_fee_saturday
           WHEN 7 THEN cb_p_up_pc.box_delivery_fee_sunday
         ELSE
-          0
+          0.00
         END)
-      ELSE 0
+      ELSE 0.00
       END AS cardboard_cost,
-      CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 1
-                OR (SELECT initial_packing_service_id FROM mp) = 1
-                OR (SELECT follow_up_packing_service_id FROM mp) = 2
-                OR (SELECT initial_packing_service_id FROM mp) = 2
-                THEN SUM(cents_for_packing/100 * quantity) + cb_p_up_pc.packing_flat_fee
-      ELSE 0
+      CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 1 OR (SELECT initial_packing_service_id FROM mp) = 1
+                AND NOT ((SELECT follow_up_packing_service_id FROM mp) = 2 OR (SELECT initial_packing_service_id FROM mp) = 2)
+                THEN SUM(cents_for_packing/100.00 * CAST(quantity AS NUMERIC))
+      ELSE 0.00
       END AS packing_cost,
       CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 2
                 OR (SELECT initial_packing_service_id FROM mp) = 2
-                THEN SUM(cents_for_unpacking/100 * quantity)
-      ELSE 0
+                THEN SUM(cents_for_unpacking/100.00 * CAST(quantity AS NUMERIC))
+      ELSE 0.00
       END AS unpacking_cost,
+      COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary) AS box_balancing_rate_primary,
+      COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary) AS box_balancing_rate_secondary,
       cb_p_up_pc.id AS cb_p_up_pc_id
     FROM mp_bi
     JOIN price_charts AS cb_p_up_pc
     ON cb_p_up_pc.id IN (SELECT cb_p_up_mwlabr.latest_pc_id FROM movers_with_location_and_balancing_rate AS cb_p_up_mwlabr)
     JOIN box_type_rates AS btr
     ON cb_p_up_pc.id = btr.price_chart_id AND btr.box_type_id = mp_bi.box_type_id
-    GROUP BY cb_p_up_pc.id, cb_p_up_pc.packing_flat_fee);
+    --ADJUSTMENTS BY DATE
+    LEFT JOIN(
+       SELECT *
+       FROM PUBLIC.daily_adjustments AS day_adj
+       JOIN PUBLIC.daily_adjustment_data AS adj_data
+         ON day_adj.daily_adjustment_datum_id = adj_data.id) AS daily
+    ON box_date  = day
+      AND cb_p_up_pc.id  = daily.price_chart_id
+    --ADJUSTMENTS BY WEEKDAY
+    LEFT JOIN(
+       SELECT *
+       FROM PUBLIC.daily_adjustment_rules AS rul_adj
+       JOIN PUBLIC.daily_adjustment_data AS adj_data
+         ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS weekly
+    ON weekday =
+       CASE WHEN box_dow = 7 THEN
+          0
+        ELSE
+          box_dow
+        END
+    AND cb_p_up_pc.id  = weekly.price_chart_id
+    GROUP BY
+      cb_p_up_pc.id,
+      cb_p_up_pc.packing_flat_fee,
+      COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary),
+      COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary));
     --DO ALL THE PRICING STUFF (oh boi)
     DROP TABLE IF EXISTS movers_and_pricing;
     CREATE TEMP TABLE movers_and_pricing AS (
@@ -597,22 +623,22 @@ DECLARE
       SELECT
         ROUND(
           ((CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
-            item_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100 * 2
+            item_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100.00 * 2.00
           ELSE
-            item_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100
+            item_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100.00
           END) +
           --BOX COST
           (CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
-            box_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100 * 2
+            box_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100.00 * 2.00
           ELSE
-            box_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100
+            box_cubic_feet * mwlabr.local_cents_per_cubic_foot / 100.00
           END) +
           --HEIGHT COST
           (total_cubic_feet * price_charts.cents_per_cubic_foot_per_flight_of_stairs * num_stairs / 100) +
           --ITEM HANDLING COST
-          (COALESCE(ihc.item_handling, 0)) +
+          (COALESCE(ihc.item_handling, 0.00)) +
           --BOX HANDLING COST
-          (COALESCE(bhc.box_handling, 0))) *
+          (COALESCE(bhc.box_handling, 0.00))) *
           --MULTIPLY ABOVE BY BALANCING RATE
           balancing_rate.rate,
         2) AS moving_cost_adjusted,
@@ -620,15 +646,15 @@ DECLARE
         ROUND(
           --TRUCK COST
           ((CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
-            Cast(price_charts.cents_per_truck / 100 * 2 as numeric)
+            Cast(price_charts.cents_per_truck / 100.00 * 2.00 as numeric)
           ELSE
-            Cast(price_charts.cents_per_truck / 100 as numeric)
+            Cast(price_charts.cents_per_truck / 100.00 as numeric)
           END) +
           --DISTANCE COST ADJUSTED
           (CASE WHEN travel_plan_miles.distance_minus_free < 0 THEN
             0.00
           ELSE
-            travel_plan_miles.distance_minus_free * price_charts.cents_per_mile / 100
+            travel_plan_miles.distance_minus_free * price_charts.cents_per_mile / 100.00
           END)
           +
           --HANDLE EXTRA LONG DISTANCE COSTS
@@ -636,13 +662,13 @@ DECLARE
             0.00
           ELSE
             --LONG DISTANCE CUBIC FEET COST WITH PRICING TIERS
-            ((total_cubic_feet * mwlabr.cents_per_cubic_foot / 100 * COALESCE(long_distance_tiers_coeffienct,1) ) + COALESCE(mwlabr.extra_fee,0))
+            ((total_cubic_feet * mwlabr.cents_per_cubic_foot / 100.00 * COALESCE(long_distance_tiers_coeffienct,1) ) + COALESCE(mwlabr.extra_fee,0))
             +
             --EXTRA DROP OFF LOCAL COST
             (CASE WHEN edo_state IS NULL THEN
               0.00
             ELSE
-              (SELECT * FROM distance_in_miles(do_key,edo_key)) * price_charts.cents_per_mile / 100
+              (SELECT * FROM distance_in_miles(do_key,edo_key)) * price_charts.cents_per_mile / 100.00
             END)
           END)) *
           --MULTIPLY ABOVE BY BALANCING RATE
@@ -653,14 +679,14 @@ DECLARE
         (crating_cost  +
         --CARPENTRY COST
         (CASE WHEN num_carpentry > 0 THEN
-          (minimum_carpentry_cost_per_hour_in_cents / 100 * price_charts.special_handling_hours)
+          (minimum_carpentry_cost_per_hour_in_cents / 100.00 * price_charts.special_handling_hours)
         ELSE
           0.00
         END
         ))* balancing_rate.rate AS special_handling_cost_adjusted,
       --STORAGE COST ADJUSTED
         ROUND(
-          (CASE WHEN do_state IS NULL OR (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+        (CASE WHEN do_state IS NULL OR (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
           --CALCULATE MULTIPLIER
           (CASE WHEN do_state IS NULL AND (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
             1.00
@@ -672,14 +698,22 @@ DECLARE
             1.50
           END) *
           --CALCULATE CUBIC FEET COST
-          (price_charts.storage_fee / 100 * total_cubic_feet)
+          (CAST(price_charts.storage_fee AS NUMERIC)/ 100.00 * total_cubic_feet)
         ELSE
           0.00
         END),2) AS storage_cost,
       --PACKING COST ADJUSTED
-        ROUND(((cb_p_up_cost_pc.packing_cost + cb_p_up_cost_pc.unpacking_cost) * balancing_rate.rate),2) AS packing_cost_adjusted,
+        ROUND((((cb_p_up_cost_pc.packing_cost) + (cb_p_up_cost_pc.unpacking_cost) + price_charts.packing_flat_fee) * balancing_rate.rate),2) AS packing_cost_adjusted,
       --CARDBOARD COST ADJUSTED
-        ROUND(((cb_p_up_cost_pc.cardboard_cost) * balancing_rate.rate),2) AS cardboard_cost_adjusted,
+        ROUND(((cb_p_up_cost_pc.cardboard_cost) *
+          --BALANCING RATE ON BOX DELIVERY DAY (ICKY)
+         (1 + (
+          (CASE WHEN mov_time = 'am' THEN
+            cb_p_up_cost_pc.box_balancing_rate_primary
+            ELSE
+            coalesce(cb_p_up_cost_pc.box_balancing_rate_secondary, cb_p_up_cost_pc.box_balancing_rate_primary)
+            END
+          ) / 100.00))),2) AS cardboard_cost_adjusted,
       --SURCHARGE CUBIC FEET COST ADJUSTED
       --COI CHARGES COST ADJUSTED
       --SIZE SURCHARGE COST ADJUSTED
@@ -707,7 +741,7 @@ DECLARE
             ELSE
             coalesce(mwlabr_br.balancing_rate_secondary, mwlabr_br.balancing_rate_primary)
             END
-          ) / 100)) AS rate, mwlabr_br.latest_pc_id FROM movers_with_location_and_balancing_rate AS mwlabr_br) AS balancing_rate
+          ) / 100.00)) AS rate, mwlabr_br.latest_pc_id FROM movers_with_location_and_balancing_rate AS mwlabr_br) AS balancing_rate
       ON balancing_rate.latest_pc_id = mwlabr.latest_pc_id
         LEFT JOIN (
           SELECT ihc.price_chart_id AS ihc_pc, sum(cost) AS item_handling
@@ -729,7 +763,7 @@ DECLARE
         ON bhc_pc = mwlabr.latest_pc_id
       LEFT JOIN (
           SELECT (
-             SUM(rate_part) + 100)/100 AS long_distance_tiers_coeffienct,
+             SUM(rate_part) + 100.00)/100.00 AS long_distance_tiers_coeffienct,
             pre_sum.price_chart_id AS long_distance_price_chart_id
           FROM(
             SELECT
@@ -744,28 +778,13 @@ DECLARE
             ORDER BY cubic_foot_max)
           AS pre_sum GROUP BY pre_sum.price_chart_id) AS long_distance_tiers
         ON long_distance_price_chart_id = mwlabr.latest_pc_id);
-
-
-
-
---             cents_per_mile,
---             cents_per_cubic_foot_of_crating, minimum_cents_per_item_crated,
---             cents_per_truck, free_miles, cents_per_cubic_foot_per_flight_of_stairs,
---             zip, minimum_carpentry_cost_per_hour_in_cents, special_handling_hours,
---             minimum_local_cubic_feet, valuation_minimum_value,
---             default_insurance_valuation_per_pound, latitude, longitutde,
---             coi_charge_cents, extra_stop_value, storage_fee, range, drop_off_mileage,
---             minimum_job_distance, box_delivery_range, minimum_long_distance_cubic_feet,
---             storage_unloading_in_cents, storage_loading_in_cents, storage_padding_in_cents,
---             apply_cubic_feet_tier_to_local_moves, apply_distance_tier_to_local_moves,
---             self_storage_enabled, self_storage_months_deposit, self_storage_free_months,
---             long_carry_free_feet, interstate_toll, box_delivery_fee_sunday,
---             box_delivery_fee_monday, box_delivery_fee_tuesday, box_delivery_fee_wednesday,
---             box_delivery_fee_thrusday, box_delivery_fee_friday, box_delivery_fee_saturday,
---             long_carry_fee, max_cubic_feet, packing_flat_fee
-
-    RETURN QUERY SELECT * FROM movers_and_pricing ORDER BY (movers_and_pricing.moving_cost_adjusted +
-                                                            movers_and_pricing.travel_cost_adjusted +
-                                                            movers_and_pricing.special_handling_cost_adjusted) ASC ;
+    RETURN QUERY SELECT * FROM movers_and_pricing ORDER BY (
+      movers_and_pricing.moving_cost_adjusted +
+      movers_and_pricing.travel_cost_adjusted +
+      movers_and_pricing.special_handling_cost_adjusted +
+      movers_and_pricing.packing_cost_adjusted +
+      movers_and_pricing.storage_cost +
+      movers_and_pricing.cardboard_cost_adjusted
+    ) ASC;
     END; $$
   LANGUAGE plpgsql;
