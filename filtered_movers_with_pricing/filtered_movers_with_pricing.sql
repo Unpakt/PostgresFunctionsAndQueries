@@ -369,7 +369,7 @@ DECLARE
     --FILTER BY BOX DELIVERY
     IF (SELECT box_delivery_date FROM mp) IS NOT NULL THEN
       DELETE FROM movers_with_location WHERE movers_with_location.box_delivery = false;
-      DELETE FROM movers_with_location WHERE earth_distance(pu_earth,movers_with_location.mover_earth) > movers_with_location.box_delivery_range;
+      DELETE FROM movers_with_location WHERE (earth_distance(pu_earth,movers_with_location.mover_earth)* 0.000621371) > movers_with_location.box_delivery_range;
     END IF;
     --FILTER BY PIANO
     IF (SELECT COUNT(*) FROM mp_ii WHERE requires_piano_services = TRUE) > 0 THEN
