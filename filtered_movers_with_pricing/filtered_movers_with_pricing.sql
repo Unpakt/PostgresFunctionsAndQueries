@@ -28,7 +28,10 @@ CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR)
 RETURNS TABLE(
   moving_cost_adjusted numeric,
   travel_cost_adjusted numeric,
-  sepcial_handling_cost_adjusted numeric,
+  special_handling_cost_adjusted numeric,
+  storage_cost numeric,
+  packing_cost_adjusted numeric,
+  cardboard_cost_adjusted numeric,
   mover_name varchar, mover_id integer,
   pick_up_mileage numeric, drop_off_mileage numeric,
   extra_stop_enabled boolean,
@@ -51,6 +54,7 @@ RETURNS TABLE(
 DECLARE mov_date date;DECLARE mov_time varchar;DECLARE num_stairs integer;
 DECLARE mp_id integer;DECLARE item_cubic_feet numeric;DECLARE box_cubic_feet numeric;
 DECLARE total_cubic_feet numeric;DECLARE num_carpentry integer;DECLARE num_crating integer;
+DECLARE box_delivery_dow integer;
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
 DECLARE epu_state varchar;DECLARE epu_earth earth;DECLARE epu_key varchar;
@@ -64,6 +68,7 @@ DECLARE
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     mov_date := (SELECT move_date FROM mp);
     mov_time :=(SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp );
+    box_delivery_dow :=  (SELECT EXTRACT(isodow FROM mov_date :: DATE));
     num_stairs := (
       SELECT sum(flights_of_stairs) FROM (
         SELECT
@@ -546,20 +551,33 @@ DECLARE
     --CARDBOARD/PACKING/UNPACKING COST BY PRICE_CHART
     DROP TABLE IF EXISTS cb_p_up_cost_pc;
     CREATE TEMP TABLE cb_p_up_cost_pc AS (SELECT
-      SUM(cents_for_cardboard/100 * quantity) AS cardboard_cost,
+      CASE WHEN box_delivery_dow IS NOT NULL THEN
+        SUM(cents_for_cardboard/100 * quantity) +
+        --FIGURE OUT REDICULOUS BOX_DELIVERY_FEE (WHAT ARE THESE PATTERNS???????)
+        (CASE box_delivery_dow
+          WHEN 1 THEN cb_p_up_pc.box_delivery_fee_monday
+          WHEN 2 THEN cb_p_up_pc.box_delivery_fee_thursday
+          WHEN 3 THEN cb_p_up_pc.box_delivery_fee_wednesday
+          WHEN 4 THEN cb_p_up_pc.box_delivery_fee_thursday
+          WHEN 5 THEN cb_p_up_pc.box_delivery_fee_friday
+          WHEN 6 THEN cb_p_up_pc.box_delivery_fee_saturday
+          WHEN 7 THEN cb_p_up_pc.box_delivery_fee_sunday
+        ELSE
+          0
+        END)
+      ELSE 0
+      END AS cardboard_cost,
       CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 1
                 OR (SELECT initial_packing_service_id FROM mp) = 1
                 OR (SELECT follow_up_packing_service_id FROM mp) = 2
                 OR (SELECT initial_packing_service_id FROM mp) = 2
-                THEN SUM(cents_for_packing/100 * quantity)
-      ELSE
-        0
+                THEN SUM(cents_for_packing/100 * quantity) + cb_p_up_pc.packing_flat_fee
+      ELSE 0
       END AS packing_cost,
       CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 2
                 OR (SELECT initial_packing_service_id FROM mp) = 2
                 THEN SUM(cents_for_unpacking/100 * quantity)
-      ELSE
-        0
+      ELSE 0
       END AS unpacking_cost,
       cb_p_up_pc.id AS cb_p_up_pc_id
     FROM mp_bi
@@ -567,7 +585,7 @@ DECLARE
     ON cb_p_up_pc.id IN (SELECT cb_p_up_mwlabr.latest_pc_id FROM movers_with_location_and_balancing_rate AS cb_p_up_mwlabr)
     JOIN box_type_rates AS btr
     ON cb_p_up_pc.id = btr.price_chart_id AND btr.box_type_id = mp_bi.box_type_id
-    GROUP BY cb_p_up_pc);
+    GROUP BY cb_p_up_pc.id, cb_p_up_pc.packing_flat_fee);
     --DO ALL THE PRICING STUFF (oh boi)
     DROP TABLE IF EXISTS movers_and_pricing;
     CREATE TEMP TABLE movers_and_pricing AS (
@@ -637,28 +655,31 @@ DECLARE
         (CASE WHEN num_carpentry > 0 THEN
           (minimum_carpentry_cost_per_hour_in_cents / 100 * price_charts.special_handling_hours)
         ELSE
-          0
+          0.00
         END
         ))* balancing_rate.rate AS special_handling_cost_adjusted,
       --STORAGE COST ADJUSTED
-        CASE WHEN do_state IS NULL OR (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+        ROUND(
+          (CASE WHEN do_state IS NULL OR (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
           --CALCULATE MULTIPLIER
           (CASE WHEN do_state IS NULL AND (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
-            1.0
-          WHEN DATE_PART('day', CAST(mp.storage_move_out_date AS timestamp) - CAST(mp.move_date AS timestamp)) <= 14 THEN
-            0.5
-          WHEN DATE_PART('day', CAST(mp.storage_move_out_date AS timestamp) - CAST(mp.move_date AS timestamp)) <= 31 THEN
-            1.0
+            1.00
+          WHEN DATE_PART('day', CAST((SELECT mp.storage_move_out_date FROM mp) AS timestamp) - CAST(mov_date AS timestamp)) <= 14 THEN
+            0.50
+          WHEN DATE_PART('day', CAST((SELECT mp.storage_move_out_date FROM mp) AS timestamp) - CAST(mov_date AS timestamp)) <= 31 THEN
+            1.00
           ELSE
-            1.5
+            1.50
           END) *
           --CALCULATE CUBIC FEET COST
           (price_charts.storage_fee / 100 * total_cubic_feet)
         ELSE
-          0
-        END AS storage_cost,
+          0.00
+        END),2) AS storage_cost,
       --PACKING COST ADJUSTED
+        ROUND(((cb_p_up_cost_pc.packing_cost + cb_p_up_cost_pc.unpacking_cost) * balancing_rate.rate),2) AS packing_cost_adjusted,
       --CARDBOARD COST ADJUSTED
+        ROUND(((cb_p_up_cost_pc.cardboard_cost) * balancing_rate.rate),2) AS cardboard_cost_adjusted,
       --SURCHARGE CUBIC FEET COST ADJUSTED
       --COI CHARGES COST ADJUSTED
       --SIZE SURCHARGE COST ADJUSTED
@@ -677,6 +698,8 @@ DECLARE
         ON mwlabr.latest_pc_id = travel_plan_miles.latest_pc_id
       JOIN crating_cost_pc
         ON crating_cost_pc.crating_pc_id = mwlabr.latest_pc_id
+      JOIN cb_p_up_cost_pc
+        ON cb_p_up_cost_pc.cb_p_up_pc_id = mwlabr.latest_pc_id
       JOIN (SELECT
         (1 + (
           (CASE WHEN mov_time = 'am' THEN
