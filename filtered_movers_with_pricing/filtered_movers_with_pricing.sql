@@ -552,6 +552,7 @@ DECLARE
     --CARDBOARD/PACKING/UNPACKING COST BY PRICE_CHART
     DROP TABLE IF EXISTS cb_p_up_cost_pc;
     CREATE TEMP TABLE cb_p_up_cost_pc AS (SELECT
+      --HANDLE BOX DELIVERY
       CASE WHEN (SELECT mp.box_delivery_date FROM MP) IS NOT NULL THEN
         SUM(cents_for_cardboard/100.00 * CAST(quantity AS NUMERIC)) +
         --FIGURE OUT REDICULOUS BOX_DELIVERY_FEE (WHAT ARE THESE PATTERNS???????)
@@ -563,21 +564,22 @@ DECLARE
           WHEN 5 THEN cb_p_up_pc.box_delivery_fee_friday
           WHEN 6 THEN cb_p_up_pc.box_delivery_fee_saturday
           WHEN 7 THEN cb_p_up_pc.box_delivery_fee_sunday
-        ELSE
-          0.00
-        END)
+        ELSE 0.00 END)
       ELSE 0.00
       END AS cardboard_cost,
+      --HANDLE PACKING COST (IF SELECTED)
       CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 1 OR (SELECT initial_packing_service_id FROM mp) = 1
                 AND NOT ((SELECT follow_up_packing_service_id FROM mp) = 2 OR (SELECT initial_packing_service_id FROM mp) = 2)
                 THEN SUM(cents_for_packing/100.00 * CAST(quantity AS NUMERIC))
       ELSE 0.00
       END AS packing_cost,
+      --HANDLE UNPACKING COST (IF SELECTED)
       CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 2
                 OR (SELECT initial_packing_service_id FROM mp) = 2
                 THEN SUM(cents_for_unpacking/100.00 * CAST(quantity AS NUMERIC))
       ELSE 0.00
       END AS unpacking_cost,
+      --BALANCING RATE FOR BOX DELIVERY (THIS TRIGGERS ME)
       COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary) AS box_balancing_rate_primary,
       COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary) AS box_balancing_rate_secondary,
       cb_p_up_pc.id AS cb_p_up_pc_id
@@ -586,7 +588,7 @@ DECLARE
     ON cb_p_up_pc.id IN (SELECT cb_p_up_mwlabr.latest_pc_id FROM movers_with_location_and_balancing_rate AS cb_p_up_mwlabr)
     JOIN box_type_rates AS btr
     ON cb_p_up_pc.id = btr.price_chart_id AND btr.box_type_id = mp_bi.box_type_id
-    --ADJUSTMENTS BY DATE
+    --BOX DELIVERY ADJUSTMENTS BY DATE
     LEFT JOIN(
        SELECT *
        FROM PUBLIC.daily_adjustments AS day_adj
@@ -594,7 +596,7 @@ DECLARE
          ON day_adj.daily_adjustment_datum_id = adj_data.id) AS daily
     ON box_date  = day
       AND cb_p_up_pc.id  = daily.price_chart_id
-    --ADJUSTMENTS BY WEEKDAY
+    --BOX DELIVERY ADJUSTMENTS BY WEEKDAY
     LEFT JOIN(
        SELECT *
        FROM PUBLIC.daily_adjustment_rules AS rul_adj
@@ -715,6 +717,9 @@ DECLARE
             END
           ) / 100.00))),2) AS cardboard_cost_adjusted,
       --SURCHARGE CUBIC FEET COST ADJUSTED
+        ROUND(
+
+            ,2) AS surcharge_cubic_feet_cost_adjusted,
       --COI CHARGES COST ADJUSTED
       --SIZE SURCHARGE COST ADJUSTED
     --ADMIN ADJUSTMENT BEFORE DISCOUNT
