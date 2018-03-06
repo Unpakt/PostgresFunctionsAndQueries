@@ -1,5 +1,6 @@
 SELECT * FROM filtered_movers_with_pricing('ac5e51bc-1e34-11e8-9cb4-c76ccf169b86');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
+SELECT * FROM comparison_presenter_v4('ac5e51bc-1e34-11e8-9cb4-c76ccf169b86');
 
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(addr1 VARCHAR, addr2 VARCHAR)
@@ -22,11 +23,15 @@ RETURN (SELECT distance_in_miles
         LIMIT 1);
 END
 $func$ LANGUAGE plpgsql;
+
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(move_plan_param VARCHAR);
 CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR)
 RETURNS TABLE(
   total numeric,
   mover_special_discount numeric,
+  facebook_discount numeric,
+  twitter_discount numeric,
+  coupon_discount numeric,
   subtotal numeric,
   moving_cost_adjusted numeric,
   travel_cost_adjusted numeric,
@@ -61,13 +66,14 @@ RETURNS TABLE(
 DECLARE mov_date date;DECLARE mov_time varchar;DECLARE num_stairs integer;
 DECLARE mp_id integer;DECLARE item_cubic_feet numeric;DECLARE box_cubic_feet numeric;
 DECLARE total_cubic_feet numeric;DECLARE num_carpentry integer;DECLARE num_crating integer;
-DECLARE box_dow integer;DECLARE box_date date;
+DECLARE box_dow integer;DECLARE box_date date;DECLARE mp_coupon_id integer;
 
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
 DECLARE epu_state varchar;DECLARE epu_earth earth;DECLARE epu_key varchar;
 DECLARE do_state varchar; DECLARE do_earth earth; DECLARE do_key varchar;
 DECLARE edo_state varchar;DECLARE edo_earth earth;DECLARE edo_key varchar;
+
 DECLARE
   BEGIN
 
@@ -88,6 +94,10 @@ DECLARE
           ON addresses.height_id = heights.id
           AND addresses.move_plan_id = mp_id
           AND addresses.role_in_plan IN ('drop_off', 'pick_up') ) as stairs);
+    mp_coupon_id := (
+      SELECT COALESCE(
+          (SELECT coupon_id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state <> 'cancelled' AND mover_state <> 'declined' ORDER BY jobs.id LIMIT 1),
+          (SELECT coupon_id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state = 'cancelled' ORDER BY jobs.id DESC LIMIT 1)));
 
     --FIND LIVE MOVERS
     DROP TABLE IF EXISTS potential_movers;
@@ -735,7 +745,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
   SELECT
 
   --TOTAL
-    total.subtotal + total.mover_special_discount AS total,
+    total.subtotal + total.mover_special_discount + total.facebook_discount + total.twitter_discount + total.coupon_discount AS total,
     total.*
   FROM (
     SELECT
@@ -757,9 +767,33 @@ CREATE TEMP TABLE movers_and_pricing AS (
         END)
       END
       ),2),0.00) AS mover_special_discount,
+
       --FACEBOOK DISCOUNT
+      CASE WHEN (SELECT mp.shared_on_facebook = true FROM mp) THEN
+          -5.00
+      ELSE
+          0
+      END AS facebook_discount,
+
       --TWITTER DISCOUNT
+      CASE WHEN (SELECT mp.shared_on_twitter = true FROM mp) THEN
+          -5.00
+      ELSE
+          0
+      END AS twitter_discount,
+
       --COUPON DISCOUNT
+      CASE
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
+          (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00 *
+          subtotal.subtotal
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
+          (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00
+      ELSE
+          0
+      END AS coupon_discount,
       subtotal.*
     FROM(
       SELECT
@@ -1038,3 +1072,94 @@ RETURN QUERY SELECT * FROM movers_and_pricing ORDER BY (
 ) ASC;
 END; $$
 LANGUAGE plpgsql;
+
+
+DROP FUNCTION IF EXISTS comparison_presenter_v4(VARCHAR);
+CREATE FUNCTION comparison_presenter_v4(move_plan_param VARCHAR)
+  RETURNS TABLE(
+  branch_property_id integer,
+  city_state_label varchar,
+  consult_only boolean,
+  dedicated boolean,
+  maximum_delivery_days integer,
+  minimum_delivery_days integer,
+  grade numeric,
+  id integer,
+  is_featured boolean,
+  logo_url varchar,
+  mover_special numeric,
+  name varchar,
+  number_of_employees integer,
+  number_of_trucks integer,
+  moving numeric,
+  packing_cost numeric,
+  special_handling_cost numeric,
+  storage_cost numeric,
+  profile_path varchar,
+  google_link varchar,
+  google_number_of_reviews integer,
+  google_rating numeric,
+  google_rounded_rating numeric,
+  unpakt_link varchar,
+  unpakt_number_of_reviews integer,
+  unpakt_rating numeric,
+  unpakt_rounded_rating numeric,
+  yelp_link varchar,
+  yelp_number_of_reviews integer,
+  yelp_rating numeric,
+  yelp_rounded_rating numeric,
+  slug varchar,
+  total_cost numeric,
+  years_in_business integer
+  ) AS
+$func$
+BEGIN
+RETURN QUERY (SELECT
+        bp.id AS branch_property_id,
+        CAST(ba.city || ', ' || ba.state AS VARCHAR) AS city_state_label,
+        (CASE WHEN pricing.location_type = 'local' THEN
+          pricing.local_consult_only
+        ELSE
+          pricing.interstate_consult_only
+        END) AS consult_only,
+        pricing.dedicated,
+        pricing.maximum_delivery_days,
+        pricing.minimum_delivery_days,
+        ROUND(movers.numeric_grade + 78) AS grade,
+        movers.id,
+        movers.is_featured,
+        bp.logo_image AS logo_url,
+        -1.00 * pricing.mover_special_discount AS mover_special,
+        bp.name,
+        movers.number_of_employees,
+        movers.number_of_trucks,
+        pricing.moving_cost_adjusted AS moving,
+        pricing.packing_cost_adjusted AS packing_cost,
+        pricing.special_handling_cost_adjusted AS special_handling_cost,
+        pricing.storage_cost AS storage_cost,
+        bp.slug AS profile_path,
+        google.link AS google_link,
+        google.number_of_reviews AS google_number_of_reviews,
+        CAST(google.rating AS NUMERIC) AS google_rating,
+        ROUND(CAST(google.rating AS numeric) * 2.00)/2 AS google_rounded_rating,
+        unpakt.link AS unpakt_link,
+        unpakt.number_of_reviews AS unpakt_number_of_reviews,
+        CAST(unpakt.rating AS NUMERIC) AS unpakt_rating,
+        ROUND(CAST(unpakt.rating AS numeric) * 2.00)/2 AS unpakt_rounded_rating,
+        yelp.link AS yelp_link,
+        yelp.number_of_reviews AS yelp_number_of_reviews,
+        CAST(yelp.rating AS NUMERIC) AS yelp_rating,
+        ROUND(CAST(yelp.rating AS numeric) * 2.00)/2 AS yelp_rounded_rating,
+        bp.slug AS slug,
+        pricing.total AS total_cost,
+        CAST(GREATEST((DATE_PART('year',now()) - COALESCE(bp.year_founded,DATE_PART('year',now()))),1) AS INTEGER) AS years_in_business
+        FROM filtered_movers_with_pricing(move_plan_param) AS pricing
+        JOIN movers ON movers.id = pricing.mover_id
+        JOIN branch_properties AS bp ON bp.branchable_id = movers.id AND branchable_type = 'Mover'
+        JOIN base_addresses AS ba ON bp.id = ba.branch_property_id
+        JOIN service_provider_ratings AS yelp ON yelp.service_provider_id = movers.id AND yelp.service_provider_type = 'Mover'AND yelp.reviewer = 'Yelp'
+        JOIN service_provider_ratings AS google ON google.service_provider_id = movers.id AND google.service_provider_type = 'Mover'AND google.reviewer = 'Google'
+        JOIN service_provider_ratings AS unpakt ON unpakt.service_provider_id = movers.id AND unpakt.service_provider_type = 'Mover'AND unpakt.reviewer = 'Unpakt'
+       );
+END
+$func$ LANGUAGE plpgsql;
