@@ -95,7 +95,7 @@ SELECT
   EXTRACT(MONTH FROM all_dates :: DATE)                                               AS all_dates_month
 FROM generate_series(
          now(),
-         DATE('now') + INTERVAL '1 year',
+         DATE('now') + INTERVAL '50 year',
          '1 day' :: INTERVAL) AS all_dates
   JOIN
   (SELECT
@@ -168,6 +168,16 @@ FROM generate_series(
            GROUP BY EXTRACT(MONTH FROM move_date :: DATE)
            ORDER BY month) AS test_month) AS by_month
     ON by_month.month = EXTRACT(MONTH FROM all_dates :: DATE)
+
 ORDER BY all_dates;
+
+SELECT ((count/avg(count) OVER (PARTITION BY part))-1)*100 by_time,
+  time FROM(
+SELECT COUNT(*) as count, time, 1 as part FROM(
+SELECT CASE WHEN move_plans.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END AS time
+FROM move_plans
+JOIN jobs
+ON jobs.move_plan_id = move_plans.id) AS inside GROUP BY time) AS by_time
+
 
 
