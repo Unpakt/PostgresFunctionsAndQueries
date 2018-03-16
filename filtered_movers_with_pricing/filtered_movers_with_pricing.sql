@@ -276,6 +276,11 @@ DECLARE
           JOIN storage_details
             ON storage_details.additional_services_id = additional_services.id;
 
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
+          RAISE EXCEPTION 'No interstate movers support this pick up address or can carry such a large amount';
+        END IF;
+
     --INTRASTATE MOVES
     ELSE
         INSERT INTO movers_by_haul SELECT
@@ -314,6 +319,10 @@ DECLARE
           JOIN storage_details
             ON storage_details.additional_services_id = additional_services.id;
 
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
+          RAISE EXCEPTION 'No in state movers support this pick up address or can carry such a large amount';
+        END IF;
             --CHECK FOR MINIMUM DISTANCE IN PA AND IL
           IF pu_state in ('IL', 'PA') THEN
             DELETE FROM movers_by_haul
@@ -323,6 +332,11 @@ DECLARE
               ON price_charts.id = movers_by_haul.latest_pc_id
               AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT * FROM earth_distance(COALESCE(do_earth,mover_earth),pu_earth)));
           END IF;
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
+          RAISE EXCEPTION 'Moves in IL or PA must exceed the minimum distance';
+        END IF;
     END IF;
 
     --FILTER BY EXTRA PICK UP
@@ -408,6 +422,11 @@ DECLARE
     CREATE TEMP TABLE movers_with_location AS
       SELECT * FROM movers_by_haul  JOIN all_mover_locations on all_mover_locations.price_chart_id =  movers_by_haul.latest_pc_id;
 
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers support this drop off address';
+        END IF;
+
     --FILTER BY EXTRA DROP OFF
     IF (SELECT mp.extra_drop_off_enabled FROM mp) = true THEN
       DELETE FROM movers_with_location WHERE movers_with_location.extra_stop_enabled = false;
@@ -416,14 +435,30 @@ DECLARE
       DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'city'  AND earth_distance(ll_to_earth(movers_with_location.location_latitude,movers_with_location.location_longitude),edo_earth)/1609.34 > movers_with_location.range;
     END IF;
 
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support this extra drop off location';
+        END IF;
+
     --FILTERING BY PACKING SERVICE
     IF (SELECT follow_up_packing_service_id FROM mp) = 1 OR (SELECT initial_packing_service_id FROM mp) = 1 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.packing = false;
     END IF;
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No Movers can support packing';
+        END IF;
+
     IF (SELECT follow_up_packing_service_id FROM mp) = 2 OR (SELECT initial_packing_service_id FROM mp) = 2 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.packing = false;
       DELETE FROM movers_with_location WHERE movers_with_location.unpacking = false;
     END IF;
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support support unpacking';
+        END IF;
 
     --FILTER BY BOX DELIVERY
     IF (SELECT box_delivery_date FROM mp) IS NOT NULL THEN
@@ -431,45 +466,90 @@ DECLARE
       DELETE FROM movers_with_location WHERE (earth_distance(pu_earth,movers_with_location.mover_earth)* 0.000621371) > movers_with_location.box_delivery_range;
     END IF;
 
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support box delivery';
+        END IF;
+
     --FILTER BY PIANO
     IF (SELECT COUNT(*) FROM mp_ii WHERE requires_piano_services = TRUE) > 0 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.piano = false;
     END IF;
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support delivery of a piano';
+        END IF;
 
     --FILTER BY MIS
     IF (SELECT COUNT(*) FROM mp_addresses WHERE role_in_plan = 'drop_off') = 0 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.warehousing = false;
     END IF;
 
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support moving into storage';
+        END IF;
+
     --FILTER BY SIT
     IF (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
       DELETE FROM movers_with_location WHERE movers_with_location.storage_in_transit = false;
     END IF;
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support storage in transit';
+        END IF;
 
     --FILTER BY PHONE REQUEST
     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'InHomeRequest') > 0 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.onsites = false;
     END IF;
 
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support phone requests';
+        END IF;
+
     --FILTER BY ONSITE REQUEST
     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'PhoneRequest') > 0 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.callback = false;
     END IF;
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support onsite requests';
+        END IF;
 
     --FILTER BY CRATING
     IF num_crating > 0 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.crating = false;
     END IF;
 
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support crating';
+        END IF;
+
     --FILTER BY DISSASEMBLY/ASSEMBLY
     IF (SELECT count(*) FROM mp_ii WHERE assembly_required = TRUE) > 0 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.disassembly_assembly = false;
     END IF;
 
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support dissasembly/assembly';
+        END IF;
+
     --FILTER BY WALL REMOVAL
     IF (SELECT count(*) FROM mp_ii WHERE wall_removal_required = TRUE) > 0 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.wall_dismounting = false;
     END IF;
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support wall dismounting';
+        END IF;
 
     --FILTER BY AVAILABILITY AND GET BALANCING RATE
     DROP TABLE IF EXISTS movers_with_location_and_balancing_rate;
@@ -537,6 +617,12 @@ DECLARE
         ELSE availability.net_pm > 0
         END
     );
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location_and_balancing_rate) = 0 THEN
+          RAISE EXCEPTION 'No movers are available on this move date';
+        END IF;
+
 
     --PRECOMPUTE TRAVEL PLAN
     DROP TABLE IF EXISTS travel_plan_miles;
