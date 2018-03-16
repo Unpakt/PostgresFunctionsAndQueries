@@ -352,7 +352,7 @@ DECLARE
 
     --FILTER BY EXTRA PICK UP
     IF (SELECT extra_pick_up_enabled FROM mp) = true THEN
-      DELETE FROM movers_by_haul WHERE (SELECT * FROM earth_distance(epu_earth,movers_by_haul.mover_earth)) > pick_up_mileage * 1609.34;
+      DELETE FROM movers_by_haul WHERE (SELECT * FROM earth_distance(epu_earth,movers_by_haul.mover_earth)) > movers_by_haul.pick_up_mileage * 1609.34;
     END IF;
 
     --FIND LOCAL MOVERS
