@@ -10,7 +10,18 @@ BEGIN
 RETURN (SELECT distance_in_miles
         FROM driving_distances
         WHERE key = (
-          SELECT string_agg(key, '::' order by key)
+          SELECT string_agg(key, '::' order by key ASC)
+          FROM (
+                 SELECT
+                   CAST(addr1 AS varchar) AS key,
+                   1 AS id
+                 UNION (SELECT
+                   CAST(addr2 AS varchar) as key,
+                   1 as id
+                 )) AS keys
+          GROUP BY id)
+        OR key = (
+          SELECT string_agg(key, '::' order by key DESC)
           FROM (
                  SELECT
                    CAST(addr1 AS varchar) AS key,
