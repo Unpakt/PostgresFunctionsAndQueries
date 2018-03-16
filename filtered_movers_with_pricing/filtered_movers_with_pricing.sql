@@ -1,6 +1,6 @@
-SELECT * FROM filtered_movers_with_pricing('ac5e51bc-1e34-11e8-9cb4-c76ccf169b86');
+SELECT * FROM filtered_movers_with_pricing('e00bf78a-ff94-11e7-7aad-0f461a27ccab');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
-SELECT * FROM comparison_presenter_v4('ac5e51bc-1e34-11e8-9cb4-c76ccf169b86');
+SELECT * FROM comparison_presenter_v4('3942a54a-0b9f-11e8-b1b5-0f461a27ccab');
 
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(addr1 VARCHAR, addr2 VARCHAR)
@@ -964,15 +964,15 @@ CREATE TEMP TABLE movers_and_pricing AS (
         --SPECIAL HANDLING COST ADJUSTED
 
           --CRATING COST
-          ROUND((crating_cost  +
+           ROUND((COALESCE(crating_cost,0.00)  +
 
-          --CARPENTRY COST
-          (CASE WHEN num_carpentry > 0 THEN
-            (minimum_carpentry_cost_per_hour_in_cents / 100.00 * price_charts.special_handling_hours)
-          ELSE
-            0.00
-          END
-          ))* balancing_rate.rate, 2) AS special_handling_cost_adjusted,
+           --CARPENTRY COST
+           (CASE WHEN num_carpentry > 0 THEN
+             COALESCE((minimum_carpentry_cost_per_hour_in_cents / 100.00 * price_charts.special_handling_hours),0.00)
+           ELSE
+             0.00
+           END
+           ))* balancing_rate.rate, 2) AS special_handling_cost_adjusted,
 
         --STORAGE COST ADJUSTED
           ROUND(
@@ -1067,15 +1067,15 @@ CREATE TEMP TABLE movers_and_pricing AS (
           ON mwlabr.latest_pc_id = travel_plan_miles.latest_pc_id
 
         --JOIN PRECOMPUTED CRATING COST
-        JOIN crating_cost_pc
+        LEFT JOIN crating_cost_pc
           ON crating_cost_pc.crating_pc_id = mwlabr.latest_pc_id
 
         --JOIN PRECOMPUTED SPECIAL HANDLING COSTS
-        JOIN cb_p_up_cost_pc
+        LEFT JOIN cb_p_up_cost_pc
           ON cb_p_up_cost_pc.cb_p_up_pc_id = mwlabr.latest_pc_id
 
         --JOIN BALANCING RATE
-        JOIN (SELECT
+        LEFT JOIN (SELECT
           (1 + (
             (CASE WHEN mov_time = 'am' THEN
               mwlabr_br.balancing_rate_primary
@@ -1202,7 +1202,7 @@ RETURN QUERY (SELECT
         ELSE
           pricing.interstate_consult_only
         END) AS consult_only,
-        pricing.dedicated,
+        COALESCE(pricing.dedicated, 'f') as dedicated,
         pricing.maximum_delivery_days,
         pricing.minimum_delivery_days,
         ROUND(movers.numeric_grade + 78) AS grade,
