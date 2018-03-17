@@ -213,7 +213,9 @@ DECLARE
     pu_key :=   (SELECT
                 CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
-                WHEN street_address is null OR street_address = '' AND zip IS NULL THEN
+                WHEN street_address is not null AND zip IS NULL THEN
+                  '"' || street_address ||'"'|| ', ' || city ||', '|| state
+                WHEN (street_address is null OR street_address = '') AND zip IS NULL THEN
                   city || ', ' || state
                 ELSE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
@@ -221,7 +223,9 @@ DECLARE
     epu_key :=  (SELECT
                 CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
-                WHEN street_address is null OR street_address = '' AND zip IS NULL THEN
+                WHEN street_address is not null AND zip IS NULL THEN
+                  '"' || street_address ||'"'|| ', ' || city ||', '|| state
+                WHEN (street_address is null OR street_address = '') AND zip IS NULL THEN
                   city || ', ' || state
                 ELSE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
@@ -229,7 +233,9 @@ DECLARE
     do_key :=   (SELECT
                 CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
-                WHEN street_address is null OR street_address = '' AND zip IS NULL THEN
+                WHEN street_address is not null AND zip IS NULL THEN
+                  '"' || street_address ||'"'|| ', ' || city ||', '|| state
+                WHEN (street_address is null OR street_address = '') AND zip IS NULL THEN
                   city || ', ' || state
                 ELSE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
@@ -237,7 +243,9 @@ DECLARE
     edo_key := (SELECT
                 CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
-                WHEN street_address is null OR street_address = '' AND zip IS NULL THEN
+                WHEN street_address is not null AND zip IS NULL THEN
+                  '"' || street_address ||'"'|| ', ' || city ||', '|| state
+                WHEN (street_address is null OR street_address = '') AND zip IS NULL THEN
                   city || ', ' || state
                 ELSE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
