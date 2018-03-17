@@ -211,7 +211,7 @@ DECLARE
         (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'),
         (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off')));
     pu_key :=   (SELECT
-                CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
+                CASE WHEN (street_address is null OR street_address = '') AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
                 WHEN street_address is not null AND zip IS NULL THEN
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state
@@ -221,7 +221,7 @@ DECLARE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
                 END  FROM mp_addresses WHERE role_in_plan = 'pick_up');
     epu_key :=  (SELECT
-                CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
+                CASE WHEN (street_address is null OR street_address = '') AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
                 WHEN street_address is not null AND zip IS NULL THEN
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state
@@ -231,7 +231,7 @@ DECLARE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
                 END  FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
     do_key :=   (SELECT
-                CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
+                CASE WHEN (street_address is null OR street_address = '') AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
                 WHEN street_address is not null AND zip IS NULL THEN
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state
@@ -241,7 +241,7 @@ DECLARE
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
                 END  FROM mp_addresses WHERE role_in_plan = 'drop_off');
     edo_key := (SELECT
-                CASE WHEN street_address is null OR street_address = '' AND zip IS NOT NULL THEN
+                CASE WHEN (street_address is null OR street_address = '') AND zip IS NOT NULL THEN
                   city || ', ' || state || ', '|| zip
                 WHEN street_address is not null AND zip IS NULL THEN
                   '"' || street_address ||'"'|| ', ' || city ||', '|| state
