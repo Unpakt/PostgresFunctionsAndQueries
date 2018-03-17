@@ -748,7 +748,7 @@ DECLARE
       (CASE WHEN num_crating > 0 THEN
         SUM(GREATEST((cicf.cubic_feet * crating_pc.cents_per_cubic_foot_of_crating / 100.00),(crating_pc.minimum_cents_per_item_crated / 100.00)))
       ELSE
-        0
+        0.00
       END) AS crating_cost,
       crating_pc.id AS crating_pc_id
     FROM crating_item_cubic_feet AS cicf
@@ -929,7 +929,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
             END) +
 
             --HEIGHT COST
-            (total_cubic_feet * price_charts.cents_per_cubic_foot_per_flight_of_stairs * num_stairs / 100.00) +
+           (total_cubic_feet * price_charts.cents_per_cubic_foot_per_flight_of_stairs * COALESCE(num_stairs,0.00) / 100.00) +
 
             --ITEM HANDLING COST
             (COALESCE(ihc.item_handling, 0.00)) +
