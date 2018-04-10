@@ -1,48 +1,28 @@
-SELECT * FROM filtered_movers_with_pricing('e00bf78a-ff94-11e7-7aad-0f461a27ccab');
+SELECT * FROM filtered_movers_with_pricing('896ae7cc-3d0d-11e8-1187-9f764f91206c');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('3942a54a-0b9f-11e8-b1b5-0f461a27ccab');
 
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
-CREATE FUNCTION distance_in_miles(addr1 VARCHAR, addr2 VARCHAR)
+CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
   RETURNS numeric AS
 $func$
 BEGIN
 RETURN (SELECT distance_in_miles
         FROM driving_distances
-        WHERE key = (
-          SELECT string_agg(key, '::' order by key ASC)
-          FROM (
-                 SELECT
-                   CAST(addr1 AS varchar) AS key,
-                   1 AS id
-                 UNION (SELECT
-                   CAST(addr2 AS varchar) as key,
-                   1 as id
-                 )) AS keys
-          GROUP BY id)
-        OR key = (
-          SELECT string_agg(key, '::' order by key DESC)
-          FROM (
-                 SELECT
-                   CAST(addr1 AS varchar) AS key,
-                   1 AS id
-                 UNION (SELECT
-                   CAST(addr2 AS varchar) as key,
-                   1 as id
-                 )) AS keys
-          GROUP BY id)
+        WHERE (pick_up_hash = pick_up AND drop_off_hash = drop_off) OR (pick_up_hash = drop_off AND drop_off_hash = pick_up)
+        ORDER BY created_at DESC
         LIMIT 1);
 END
 $func$ LANGUAGE plpgsql;
-
-DROP FUNCTION IF EXISTS filtered_movers_with_pricing(move_plan_param VARCHAR);
-CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR)
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR);
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER);
+CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER DEFAULT NULL)
 RETURNS TABLE(
   total numeric,
   mover_special_discount numeric, facebook_discount numeric,
   twitter_discount numeric, coupon_discount numeric,
   subtotal numeric,
-  moving_cost_adjusted numeric, ravel_cost_adjusted numeric,
+  moving_cost_adjusted numeric, travel_cost_adjusted numeric,
   special_handling_cost_adjusted numeric, storage_cost numeric,
   packing_cost_adjusted numeric, cardboard_cost_adjusted numeric,
   surcharge_cubic_feet_cost_adjusted numeric,
@@ -116,8 +96,11 @@ DECLARE
       JOIN branch_properties
         ON branchable_id = movers.id
         AND branchable_type = 'Mover'
-        AND state = 'live'
+        AND marketplace_status = 'live'
         AND is_hidden ='false'
+        AND (CASE WHEN mover_param IS NOT NULL THEN
+             movers.id = mover_param
+            ELSE 1=1 END)
       JOIN (SELECT
               id as latest_pc_id,
               price_charts.mover_id AS pc_mover_id,
@@ -210,46 +193,10 @@ DECLARE
     edo_earth := (SELECT * FROM ll_to_earth(
         (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'),
         (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off')));
-    pu_key :=   (SELECT
-                CASE WHEN (street_address is null OR street_address = '') AND zip IS NOT NULL THEN
-                  city || ', ' || state || ', '|| zip
-                WHEN street_address is not null AND zip IS NULL THEN
-                  '"' || street_address ||'"'|| ', ' || city ||', '|| state
-                WHEN (street_address is null OR street_address = '') AND zip IS NULL THEN
-                  city || ', ' || state
-                ELSE
-                  '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
-                END  FROM mp_addresses WHERE role_in_plan = 'pick_up');
-    epu_key :=  (SELECT
-                CASE WHEN (street_address is null OR street_address = '') AND zip IS NOT NULL THEN
-                  city || ', ' || state || ', '|| zip
-                WHEN street_address is not null AND zip IS NULL THEN
-                  '"' || street_address ||'"'|| ', ' || city ||', '|| state
-                WHEN (street_address is null OR street_address = '') AND zip IS NULL THEN
-                  city || ', ' || state
-                ELSE
-                  '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
-                END  FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
-    do_key :=   (SELECT
-                CASE WHEN (street_address is null OR street_address = '') AND zip IS NOT NULL THEN
-                  city || ', ' || state || ', '|| zip
-                WHEN street_address is not null AND zip IS NULL THEN
-                  '"' || street_address ||'"'|| ', ' || city ||', '|| state
-                WHEN (street_address is null OR street_address = '') AND zip IS NULL THEN
-                  city || ', ' || state
-                ELSE
-                  '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
-                END  FROM mp_addresses WHERE role_in_plan = 'drop_off');
-    edo_key := (SELECT
-                CASE WHEN (street_address is null OR street_address = '') AND zip IS NOT NULL THEN
-                  city || ', ' || state || ', '|| zip
-                WHEN street_address is not null AND zip IS NULL THEN
-                  '"' || street_address ||'"'|| ', ' || city ||', '|| state
-                WHEN (street_address is null OR street_address = '') AND zip IS NULL THEN
-                  city || ', ' || state
-                ELSE
-                  '"' || street_address ||'"'|| ', ' || city ||', '|| state || ', '|| zip
-                END  FROM mp_addresses WHERE role_in_plan = 'extra_drop_off');
+    pu_key  := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'pick_up');
+    epu_key := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
+    do_key  := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'drop_off');
+    edo_key := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'extra_drop_off');
 
     --FILTER BY HAUL TYPE, PICK UP DISTANCE, INTRA/INTER(STATE) CERTIFICATION, MAX CUBIC FEET, MINIMUM DISTANCE
     DROP TABLE IF EXISTS movers_by_haul;
@@ -649,7 +596,7 @@ DECLARE
         mwlabr.latest_pc_id,
 
         --WAREHOUSE TO PICK UP DISTANCE
-      ((SELECT * FROM distance_in_miles(pu_key,price_charts.zip)) +
+      ((SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key)) +
 
           --HANDLE LOCAL
         (CASE WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NULL THEN
@@ -675,11 +622,11 @@ DECLARE
             (SELECT * FROM distance_in_miles(do_key,edo_key)) +
 
               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(edo_key,price_charts.zip))
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))
           ELSE
 
               --DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,price_charts.zip))
+            (SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key))
           END)
 
           --HANDLE LOCAL SIT
@@ -692,28 +639,28 @@ DECLARE
             (SELECT * FROM distance_in_miles(pu_key,epu_key))+
 
               --EXTRA PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,price_charts.zip))
+            (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))
           ELSE
 
               --PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,price_charts.zip))
+            (SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))
           END) +
 
             --HANDLE EXTRA DROP OFF
           (CASE WHEN edo_state IS NOT NULL THEN
 
               --WAREHOUSE TO DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(price_charts.zip,do_key)) +
+            (SELECT * FROM distance_in_miles(price_charts.distance_cache_key,do_key)) +
 
               --DROP OFF TO EXTRA DROP OFF DISTANCE
             (SELECT * FROM distance_in_miles(do_key,edo_key)) +
 
               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(edo_key,price_charts.zip))
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))
           ELSE
 
               --DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,price_charts.zip)) * 2
+            (SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)) * 2
           END)
 
           --SUBTRACT EXTRA FREE MILES FOR LOCAL SIT
@@ -727,11 +674,11 @@ DECLARE
             (SELECT * FROM distance_in_miles(pu_key,epu_key))+
 
               --EXTRA PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,price_charts.zip))
+            (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))
           ELSE
 
               --PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,price_charts.zip))
+            (SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))
           END)
         END)
 
@@ -1262,3 +1209,6 @@ RETURN QUERY (SELECT
        );
 END
 $func$ LANGUAGE plpgsql;
+
+
+
