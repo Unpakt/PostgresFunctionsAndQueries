@@ -1,17 +1,23 @@
-SELECT * FROM filtered_movers_with_pricing('896ae7cc-3d0d-11e8-1187-9f764f91206c');
+SELECT * FROM filtered_movers_with_pricing('0ec66b0e-3d99-11e8-1587-9f764f91206c');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
-SELECT * FROM comparison_presenter_v4('3942a54a-0b9f-11e8-b1b5-0f461a27ccab');
+SELECT * FROM comparison_presenter_v4('2b20724e-3d95-11e8-1387-9f764f91206c');
 
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
   RETURNS numeric AS
 $func$
 BEGIN
-RETURN (SELECT distance_in_miles
+RETURN COALESCE(
+        (SELECT distance_in_miles
         FROM driving_distances
-        WHERE (pick_up_hash = pick_up AND drop_off_hash = drop_off) OR (pick_up_hash = drop_off AND drop_off_hash = pick_up)
+        WHERE (pick_up_hash = pick_up AND drop_off_hash = drop_off)
         ORDER BY created_at DESC
-        LIMIT 1);
+        LIMIT 1),
+        (SELECT distance_in_miles
+        FROM driving_distances
+        WHERE (pick_up_hash = drop_off AND drop_off_hash = pick_up)
+        ORDER BY created_at DESC
+        LIMIT 1));
 END
 $func$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR);
@@ -666,21 +672,21 @@ DECLARE
           --SUBTRACT EXTRA FREE MILES FOR LOCAL SIT
           - price_charts.free_miles
 
-          --HANDLE LONG DISTANCE AND MOVE INTO STORAGE
+      --HANDLE LONG DISTANCE AND MOVE INTO STORAGE
+      ELSE
+        (CASE WHEN epu_state IS NOT NULL THEN
+
+            --PICK UP TO EXTRA PICK UP DISTANCE
+          (SELECT * FROM distance_in_miles(pu_key,epu_key))+
+
+            --EXTRA PICK UP TO WAREHOUSE DISTANCE
+          (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))
         ELSE
-          (CASE WHEN epu_state IS NOT NULL THEN
 
-              --PICK UP TO EXTRA PICK UP DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,epu_key))+
-
-              --EXTRA PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))
-          ELSE
-
-              --PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))
-          END)
+            --PICK UP TO WAREHOUSE DISTANCE
+          (SELECT * FROM distance_in_miles(price_charts.distance_cache_key,pu_key))
         END)
+      END)
 
         --SUBTRACT FREE MILES FOR ALL MOVES
         - price_charts.free_miles) AS distance_minus_free
@@ -892,36 +898,43 @@ CREATE TEMP TABLE movers_and_pricing AS (
           ROUND(
 
             --TRUCK COST
-            ((CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
-              Cast(price_charts.cents_per_truck / 100.00 * 2.00 as numeric)
-            ELSE
-              Cast(price_charts.cents_per_truck / 100.00 as numeric)
-            END) +
+            (
+              (CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
+                Cast(price_charts.cents_per_truck / 100.00 * 2.00 as numeric)
+              ELSE
+                Cast(price_charts.cents_per_truck / 100.00 as numeric)
+              END) +
 
-            --DISTANCE COST ADJUSTED
-            (CASE WHEN travel_plan_miles.distance_minus_free < 0 THEN
-              0.00
-            ELSE
-              travel_plan_miles.distance_minus_free * price_charts.cents_per_mile / 100.00
-            END)
-            +
-
-            --HANDLE EXTRA LONG DISTANCE COSTS
-            (CASE WHEN mwlabr.location_type = 'local' THEN
-              0.00
-            ELSE
-
-              --LONG DISTANCE CUBIC FEET COST WITH PRICING TIERS
-              ((total_cubic_feet * mwlabr.cents_per_cubic_foot / 100.00 * COALESCE(long_distance_tiers_coefficient,1.00) ) + COALESCE(mwlabr.extra_fee,0.00))
-              +
-
-              --EXTRA DROP OFF LOCAL COST
-              (CASE WHEN edo_state IS NULL THEN
+              --DISTANCE COST ADJUSTED
+              (CASE WHEN travel_plan_miles.distance_minus_free < 0 THEN
                 0.00
               ELSE
-                (SELECT * FROM distance_in_miles(do_key,edo_key)) * price_charts.cents_per_mile / 100.00
+                travel_plan_miles.distance_minus_free * price_charts.cents_per_mile / 100.00
+              END) +
+
+              --HANDLE EXTRA LONG DISTANCE COSTS
+              (CASE WHEN mwlabr.location_type = 'local' THEN
+                0.00
+              ELSE
+
+                --LONG DISTANCE CUBIC FEET COST WITH PRICING TIERS
+                ((total_cubic_feet * mwlabr.cents_per_cubic_foot / 100.00 * COALESCE(long_distance_tiers_coefficient,1.00) ) + COALESCE(mwlabr.extra_fee,0.00)) +
+
+                --EXTRA DROP OFF LOCAL COST
+                (CASE WHEN edo_state IS NULL THEN
+                  0.00
+                ELSE
+                  (SELECT * FROM distance_in_miles(do_key,edo_key)) * price_charts.cents_per_mile / 100.00
+                END)
+              END) +
+
+              --INTERSTATE TOLL COST
+              (CASE WHEN mwlabr.location_type = 'local' AND (SELECT COUNT(DISTINCT(state)) FROM mp_addresses) > 1 THEN
+                price_charts.interstate_toll
+              ELSE
+                0.00
               END)
-            END)) *
+            ) *
 
             --MULTIPLY ABOVE BY BALANCING RATE
             balancing_rate.rate,
