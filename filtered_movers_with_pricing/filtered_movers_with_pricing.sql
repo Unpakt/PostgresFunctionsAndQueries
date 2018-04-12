@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('0ec66b0e-3d99-11e8-1587-9f764f91206c');
+SELECT * FROM filtered_movers_with_pricing('3501915a-3e65-11e8-2187-9f764f91206c');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('2b20724e-3d95-11e8-1387-9f764f91206c');
 
@@ -332,7 +332,8 @@ DECLARE
         movers_by_haul.pu_lat as location_latitude, movers_by_haul.pu_long as location_longitude,
         earth_distance(movers_by_haul.mover_earth,do_earth)/1609.34 AS distance_in_miles
       FROM movers_by_haul
-      WHERE (SELECT * FROM earth_distance(movers_by_haul.mover_earth, COALESCE(do_earth,pu_earth))) <= movers_by_haul.drop_off_mileage * 1609.34);
+      WHERE (SELECT * FROM earth_distance(movers_by_haul.mover_earth, COALESCE(do_earth,pu_earth))) <= movers_by_haul.drop_off_mileage * 1609.34
+      AND (SELECT local_moves FROM price_charts WHERE movers_by_haul.latest_pc_id = price_charts.id ));
 
     --FIND ALL LONG DISTANCE MOVER LOCATIONS
     DROP TABLE IF EXISTS mover_state_locations;
