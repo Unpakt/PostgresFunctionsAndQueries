@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('3501915a-3e65-11e8-2187-9f764f91206c');
+SELECT * FROM filtered_movers_with_pricing('f3b7c32e-3e8a-11e8-2387-9f764f91206c');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('2b20724e-3d95-11e8-1387-9f764f91206c');
 
@@ -103,7 +103,11 @@ DECLARE
         ON branchable_id = movers.id
         AND branchable_type = 'Mover'
         AND marketplace_status = 'live'
-        AND is_hidden ='false'
+        AND (CASE WHEN (SELECT mp.source FROM mp) = 'tcs' THEN
+              is_hidden in (true, false)
+            ELSE
+              is_hidden = false
+            END)
         AND (CASE WHEN mover_param IS NOT NULL THEN
              movers.id = mover_param
             ELSE 1=1 END)
@@ -978,8 +982,13 @@ CREATE TEMP TABLE movers_and_pricing AS (
         --PACKING COST ADJUSTED
           ROUND((((cb_p_up_cost_pc.packing_cost) +
                   (cb_p_up_cost_pc.unpacking_cost) +
-                  price_charts.packing_flat_fee) *
-                  balancing_rate.rate),2) AS packing_cost_adjusted,
+                  (CASE WHEN (SELECT follow_up_packing_service_id FROM mp) IN (1,2) OR (SELECT initial_packing_service_id FROM mp) IN (1,2) THEN
+                    price_charts.packing_flat_fee
+                  ELSE
+                    0.00
+                  END)
+                 ) *
+                balancing_rate.rate),2) AS packing_cost_adjusted,
 
         --CARDBOARD COST ADJUSTED
           ROUND(((cb_p_up_cost_pc.cardboard_cost) *
