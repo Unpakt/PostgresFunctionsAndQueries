@@ -424,6 +424,18 @@ DECLARE
           RAISE EXCEPTION 'No movers can support this extra drop off location';
         END IF;
 
+    --FILTER BY EXTRA PICK UP
+    IF (SELECT mp.extra_pick_up_enabled FROM mp) = true THEN
+      DELETE FROM movers_with_location WHERE movers_with_location.extra_stop_enabled = false;
+    END IF;
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+          RAISE EXCEPTION 'No movers can support this extra pick up location';
+        END IF;
+
+
+
     --FILTERING BY PACKING SERVICE
     IF (SELECT follow_up_packing_service_id FROM mp) = 1 OR (SELECT initial_packing_service_id FROM mp) = 1 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.packing = false;
@@ -467,7 +479,7 @@ DECLARE
 
     --FILTER BY MIS
     IF (SELECT COUNT(*) FROM mp_addresses WHERE role_in_plan = 'drop_off') = 0 THEN
-      DELETE FROM movers_with_location WHERE movers_with_location.warehousing = false;
+      DELETE FROM movers_with_location WHERE movers_with_location.warehousing = false OR movers_with_location.storage = false;
     END IF;
 
         --RAISE NO MOVER FOUND ERROR
@@ -477,7 +489,7 @@ DECLARE
 
     --FILTER BY SIT
     IF (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
-      DELETE FROM movers_with_location WHERE movers_with_location.storage_in_transit = false;
+      DELETE FROM movers_with_location WHERE movers_with_location.storage_in_transit = false OR movers_with_location.storage = false;
     END IF;
 
         --RAISE NO MOVER FOUND ERROR
