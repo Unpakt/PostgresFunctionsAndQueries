@@ -303,10 +303,10 @@ DECLARE
           IF pu_state in ('IL', 'PA') THEN
             DELETE FROM movers_by_haul
             WHERE movers_by_haul.mover_id
-            IN (SELECT * FROM movers_by_haul
+            IN (SELECT movers_by_haul.mover_id FROM movers_by_haul
               JOIN price_charts
               ON price_charts.id = movers_by_haul.latest_pc_id
-              AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT * FROM earth_distance(COALESCE(do_earth,mover_earth),pu_earth)));
+              AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT earth_distance(COALESCE(do_earth,movers_by_haul.mover_earth),pu_earth)));
           END IF;
 
         --RAISE NO MOVER FOUND ERROR
