@@ -379,15 +379,22 @@ DECLARE
         closest_locations.extra_fee, closest_locations.range, closest_locations.partially_active,
         closest_locations.latitude as location_latitude, closest_locations.longitude AS location_longitude,
         closest_locations.distance_in_miles
-      FROM (SELECT mover_locations.*, earth_distance(ll_to_earth(latitude,longitude),do_earth)/1609.34 AS distance_in_miles, rank()
-        OVER (PARTITION BY mover_locations.price_chart_id ORDER BY earth_distance(ll_to_earth(latitude,longitude),do_earth) ASC, mover_locations.cents_per_cubic_foot DESC)
+      FROM (
+      SELECT * FROM (SELECT *, rank()
+        OVER (PARTITION BY all_valid_locations.price_chart_id ORDER BY earth_distance(ll_to_earth(latitude,longitude),(SELECT * FROM ll_to_earth(
+        (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'drop_off'),
+        (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'drop_off')))) ASC, all_valid_locations.cents_per_cubic_foot DESC) as rank
+       FROM
+      (SELECT mover_locations.*, earth_distance(ll_to_earth(latitude,longitude),(SELECT * FROM ll_to_earth(
+        (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'drop_off'),
+        (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'drop_off'))))/1609.34 AS distance_in_miles
           FROM public.mover_locations
-            WHERE state_code IN (do_state, edo_state)
+            WHERE state_code IN ((SELECT state FROM mp_addresses WHERE role_in_plan = 'drop_off'), (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'))
             AND mover_locations.active = TRUE
             AND mover_locations.location_type='city'
             AND mover_locations.price_chart_id IN (SELECT DISTINCT mover_state_locations.price_chart_id FROM mover_state_locations WHERE mover_state_locations.partially_active = true)
-            AND mover_locations.price_chart_id NOT IN (SELECT DISTINCT mover_full_state_locations.price_chart_id FROM mover_full_state_locations)) AS closest_locations
-      WHERE RANK = 1 AND closest_locations.distance_in_miles <= closest_locations.range);
+            AND mover_locations.price_chart_id NOT IN (SELECT DISTINCT mover_full_state_locations.price_chart_id FROM mover_full_state_locations)) AS all_valid_locations
+      WHERE all_valid_locations.distance_in_miles <= all_valid_locations.range) AS ranked_locations WHERE rank = 1) AS closest_locations);
 
     --UNION LOCAL,STATE,CITY LOCATIONS
     DROP TABLE IF EXISTS all_mover_locations;
