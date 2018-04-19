@@ -149,16 +149,16 @@ DECLARE
     --FIND CRATING ITEMS CUBIC FEET
     DROP TABLE IF EXISTS crating_item_cubic_feet;
     CREATE TEMP TABLE crating_item_cubic_feet AS(
-      SELECT cubic_feet
+      SELECT COALESCE(cubic_feet,0) as cubic_feet
       FROM mp_ii WHERE crating_required = true
     );
 
     --FIND TOTAL ITEM CUBIC FEET
-    item_cubic_feet := (SELECT SUM(cubic_feet) FROM mp_ii);
+    item_cubic_feet := (SELECT COALESCE(SUM(cubic_feet),0) FROM mp_ii);
 
     --FIND TOTAL BOX CUBIC FEET
     box_cubic_feet := (
-      SELECT SUM(cubic_feet * quantity)
+      SELECT SUM(COALESCE(cubic_feet * quantity,0))
       FROM mp_bi
       GROUP BY mp_bi.move_plan_id);
 
@@ -166,10 +166,10 @@ DECLARE
     total_cubic_feet := (SELECT box_cubic_feet + item_cubic_feet);
 
     --FIND NUMBER OF CRATING ITEMS
-    num_crating := (SELECT count(*) FROM crating_item_cubic_feet);
+    num_crating := (SELECT COALESCE(count(*),0) FROM crating_item_cubic_feet);
 
     --FIND NUMBER OF 'CARPENTRY' ITEMS
-    num_carpentry := (SELECT count(*) FROM mp_ii WHERE wall_removal_required = true OR assembly_required = true);
+    num_carpentry := (SELECT COALESCE(count(*),0) FROM mp_ii WHERE wall_removal_required = true OR assembly_required = true);
 
     --SET ADDRESS VARIABLES USING THIS STUPID METHOD BECAUSE THE RAILS DEVELOPERS CAN'T READ THE POSTGRES DOCUMENTATION
     --https://www.postgresql.org/docs/current/static/sql-select.html Description #8
