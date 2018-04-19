@@ -157,10 +157,10 @@ DECLARE
     item_cubic_feet := (SELECT COALESCE(SUM(cubic_feet),0) FROM mp_ii);
 
     --FIND TOTAL BOX CUBIC FEET
-    box_cubic_feet := (
+    box_cubic_feet := (SELECT COALESCE((
       SELECT SUM(COALESCE(cubic_feet * quantity,0))
       FROM mp_bi
-      GROUP BY mp_bi.move_plan_id);
+      GROUP BY mp_bi.move_plan_id),0));
 
     --FIND TOTAL CUBIC FEET
     total_cubic_feet := (SELECT box_cubic_feet + item_cubic_feet);
