@@ -246,7 +246,7 @@ DECLARE
                 pu_earth))
 
             --LESS THAN MAX CUBIC FEET
-            AND (price_charts.max_cubic_feet IS NULL OR item_cubic_feet <= price_charts.max_cubic_feet)
+            AND (price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet)
           JOIN additional_services
             ON additional_services.price_chart_id = price_charts.id
           JOIN storage_details
