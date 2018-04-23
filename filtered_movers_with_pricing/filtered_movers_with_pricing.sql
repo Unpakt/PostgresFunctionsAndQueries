@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('8c4befae-0ced-11e8-81b6-0f461a27ccab');
+SELECT * FROM filtered_movers_with_pricing('f3b7c32e-3e8a-11e8-2387-9f764f91206c');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('2b20724e-3d95-11e8-1387-9f764f91206c');
 
@@ -51,14 +51,13 @@ RETURNS TABLE(
   extra_fee numeric, range numeric, partially_active boolean,
   location_latitude DOUBLE PRECISION, location_longitude DOUBLE PRECISION,
   distance_in_miles DOUBLE PRECISION, balancing_rate_primary NUMERIC,
-  balancing_rate_secondary NUMERIC, net_am BIGINT, net_pm BIGINT, sit_avail BIGINT) AS $$
+  balancing_rate_secondary NUMERIC, net_am BIGINT, net_pm BIGINT) AS $$
 
 --DEFINE GENERAL VARIABLES
-DECLARE mov_date date;DECLARE mov_time varchar;DECLARE sit_date date;
-DECLARE mp_id integer;DECLARE mp_coupon_id integer;DECLARE num_stairs integer;
-DECLARE total_cubic_feet numeric;DECLARE item_cubic_feet numeric;
-DECLARE num_carpentry integer;DECLARE num_crating integer;
-DECLARE box_dow integer;DECLARE box_date date;DECLARE box_cubic_feet numeric;
+DECLARE mov_date date;DECLARE mov_time varchar;DECLARE num_stairs integer;
+DECLARE mp_id integer;DECLARE item_cubic_feet numeric;DECLARE box_cubic_feet numeric;
+DECLARE total_cubic_feet numeric;DECLARE num_carpentry integer;DECLARE num_crating integer;
+DECLARE box_dow integer;DECLARE box_date date;DECLARE mp_coupon_id integer;
 
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
@@ -74,8 +73,7 @@ DECLARE
     DROP TABLE IF EXISTS mp;
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     mov_date := (SELECT move_date FROM mp);
-    mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp );
-    sit_date := (SELECT storage_move_out_date FROM mp);
+    mov_time :=(SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp );
     box_date := (SELECT box_delivery_date FROM mp);
     box_dow := (SELECT EXTRACT(isodow FROM box_date :: DATE));
     num_stairs := (
@@ -587,7 +585,7 @@ DECLARE
            FROM PUBLIC.daily_adjustments AS day_adj
            JOIN PUBLIC.daily_adjustment_data AS adj_data
              ON day_adj.daily_adjustment_datum_id = adj_data.id) AS daily
-         ON mov_date  = daily.day
+         ON mov_date  = day
           AND mwl.price_chart_id = daily.price_chart_id
 
         --ADJUSTMENTS BY WEEKDAY
@@ -596,7 +594,7 @@ DECLARE
            FROM PUBLIC.daily_adjustment_rules AS rul_adj
            JOIN PUBLIC.daily_adjustment_data AS adj_data
              ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS weekly
-        ON weekly.weekday =
+        ON weekday =
            CASE WHEN EXTRACT(isodow FROM mov_date :: DATE) = 7 THEN
               0
             ELSE
@@ -610,7 +608,7 @@ DECLARE
            FROM PUBLIC.daily_adjustments AS day_adj
            JOIN PUBLIC.daily_adjustment_data AS adj_data
              ON day_adj.daily_adjustment_datum_id = adj_data.id) AS daily_sit
-         ON sit_date = daily_sit.day
+         ON mp.storage_move_out_date  = day
           AND mwl.price_chart_id = daily.price_chart_id
 
         --SIT ADJUSTMENTS BY WEEKDAY
@@ -619,11 +617,11 @@ DECLARE
            FROM PUBLIC.daily_adjustment_rules AS rul_adj
            JOIN PUBLIC.daily_adjustment_data AS adj_data
              ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS weekly_sit
-        ON weekly_sit.weekday =
-           CASE WHEN EXTRACT(isodow FROM sit_date  :: DATE) = 7 THEN
+        ON weekday =
+           CASE WHEN EXTRACT(isodow FROM mp.storage_move_out_date  :: DATE) = 7 THEN
               0
             ELSE
-              EXTRACT(isodow FROM sit_date  :: DATE)
+              EXTRACT(isodow FROM mp.storage_move_out_date  :: DATE)
             END
         AND mwl.price_chart_id = weekly.price_chart_id
 
