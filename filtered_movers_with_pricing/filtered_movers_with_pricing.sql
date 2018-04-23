@@ -497,12 +497,6 @@ DECLARE
           RAISE EXCEPTION 'No movers can support storage in transit';
         END IF;
 
-    --FILTER BY SIT AVAILABILITY
-    IF (SELECT storage_move_out_date FROM mp ) IS NOT NULL THEN
-    --TODO
-    END IF;
-
-
     --FILTER BY PHONE REQUEST
     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'InHomeRequest') > 0 THEN
       DELETE FROM movers_with_location WHERE movers_with_location.onsites = false;
@@ -572,11 +566,7 @@ DECLARE
           CASE WHEN COALESCE(daily.capacity_secondary, weekly.capacity_secondary) IS NULL
             THEN COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
           ELSE COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0)
-            END as net_am,
-          CASE WHEN COALESCE(daily_sit.capacity_secondary, weekly_sit.capacity_secondary) IS NULL
-            THEN COALESCE(daily.capacity_primary, weekly_sit.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-          ELSE COALESCE(daily.capacity_primary, weekly_sit.capacity_primary) - COALESCE(am, 0)
-            END as sit_avail
+            END as net_am
         FROM movers_with_location as mwl
 
         --ADJUSTMENTS BY DATE
@@ -599,29 +589,6 @@ DECLARE
               0
             ELSE
               EXTRACT(isodow FROM mov_date :: DATE)
-            END
-        AND mwl.price_chart_id = weekly.price_chart_id
-
-        --SIT ADJUSTMENTS BY DATE
-        LEFT JOIN(
-           SELECT *
-           FROM PUBLIC.daily_adjustments AS day_adj
-           JOIN PUBLIC.daily_adjustment_data AS adj_data
-             ON day_adj.daily_adjustment_datum_id = adj_data.id) AS daily_sit
-         ON mp.storage_move_out_date  = day
-          AND mwl.price_chart_id = daily.price_chart_id
-
-        --SIT ADJUSTMENTS BY WEEKDAY
-        LEFT JOIN(
-           SELECT *
-           FROM PUBLIC.daily_adjustment_rules AS rul_adj
-           JOIN PUBLIC.daily_adjustment_data AS adj_data
-             ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS weekly_sit
-        ON weekday =
-           CASE WHEN EXTRACT(isodow FROM mp.storage_move_out_date  :: DATE) = 7 THEN
-              0
-            ELSE
-              EXTRACT(isodow FROM mp.storage_move_out_date  :: DATE)
             END
         AND mwl.price_chart_id = weekly.price_chart_id
 
