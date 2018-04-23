@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('8c4befae-0ced-11e8-81b6-0f461a27ccab');
+SELECT * FROM filtered_movers_with_pricing('4e62ab18-0dc1-11e8-12a9-41df8e0f4b38');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('2b20724e-3d95-11e8-1387-9f764f91206c');
 
@@ -499,10 +499,10 @@ DECLARE
           RAISE EXCEPTION 'No movers can support storage in transit';
         END IF;
 
-    --FILTER BY SIT AVAILABILITY
-    IF (SELECT storage_move_out_date FROM mp ) IS NOT NULL THEN
-    --TODO
-    END IF;
+--     --FILTER BY SIT AVAILABILITY
+--     IF (SELECT storage_move_out_date FROM mp ) IS NOT NULL THEN
+--     --TODO
+--     END IF;
 
 
     --FILTER BY PHONE REQUEST
@@ -558,8 +558,8 @@ DECLARE
     --FILTER BY AVAILABILITY AND GET BALANCING RATE
     DROP TABLE IF EXISTS movers_with_location_and_balancing_rate;
     CREATE TEMP TABLE movers_with_location_and_balancing_rate AS (
-      SELECT * FROM (
-        SELECT
+      SELECT * FROM
+        (SELECT
           mwl.*,
 
           --BALANCING RATE
@@ -578,54 +578,53 @@ DECLARE
           CASE WHEN COALESCE(daily_sit.capacity_secondary, weekly_sit.capacity_secondary) IS NULL
             THEN COALESCE(daily.capacity_primary, weekly_sit.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
           ELSE COALESCE(daily.capacity_primary, weekly_sit.capacity_primary) - COALESCE(am, 0)
-            END as sit_avail
+            END sit_avail
         FROM movers_with_location as mwl
 
         --ADJUSTMENTS BY DATE
         LEFT JOIN(
            SELECT *
-           FROM PUBLIC.daily_adjustments AS day_adj
-           JOIN PUBLIC.daily_adjustment_data AS adj_data
-             ON day_adj.daily_adjustment_datum_id = adj_data.id) AS daily
-         ON mov_date  = daily.day
-          AND mwl.price_chart_id = daily.price_chart_id
+           FROM daily_adjustments AS day_adj
+           JOIN daily_adjustment_data AS adj_data
+             ON day_adj.daily_adjustment_datum_id = adj_data.id
+             AND day_adj.day = mov_date) AS daily
+           ON daily.price_chart_id = mwl.price_chart_id
 
         --ADJUSTMENTS BY WEEKDAY
-        LEFT JOIN(
-           SELECT *
-           FROM PUBLIC.daily_adjustment_rules AS rul_adj
-           JOIN PUBLIC.daily_adjustment_data AS adj_data
-             ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS weekly
-        ON weekly.weekday =
-           CASE WHEN EXTRACT(isodow FROM mov_date :: DATE) = 7 THEN
-              0
-            ELSE
-              EXTRACT(isodow FROM mov_date :: DATE)
-            END
-        AND mwl.price_chart_id = weekly.price_chart_id
+        LEFT JOIN(SELECT *
+           FROM daily_adjustment_rules AS rul_adj
+           JOIN daily_adjustment_data AS adj_data
+             ON rul_adj.daily_adjustment_datum_id = adj_data.id
+             AND rul_adj.weekday =
+               CASE WHEN EXTRACT(isodow FROM mov_date :: DATE) = 7 THEN
+                  0
+                ELSE
+                  EXTRACT(isodow FROM mov_date :: DATE)
+                END) AS weekly
+           ON weekly.price_chart_id = mwl.price_chart_id
 
         --SIT ADJUSTMENTS BY DATE
         LEFT JOIN(
            SELECT *
-           FROM PUBLIC.daily_adjustments AS day_adj
-           JOIN PUBLIC.daily_adjustment_data AS adj_data
-             ON day_adj.daily_adjustment_datum_id = adj_data.id) AS daily_sit
-         ON sit_date = daily_sit.day
-          AND mwl.price_chart_id = daily.price_chart_id
+           FROM daily_adjustments AS day_adj
+           JOIN daily_adjustment_data AS adj_data
+             ON day_adj.daily_adjustment_datum_id = adj_data.id
+             AND day_adj.day = sit_date) AS daily_sit
+           ON daily_sit.price_chart_id = mwl.price_chart_id
 
         --SIT ADJUSTMENTS BY WEEKDAY
         LEFT JOIN(
            SELECT *
-           FROM PUBLIC.daily_adjustment_rules AS rul_adj
-           JOIN PUBLIC.daily_adjustment_data AS adj_data
-             ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS weekly_sit
-        ON weekly_sit.weekday =
-           CASE WHEN EXTRACT(isodow FROM sit_date  :: DATE) = 7 THEN
-              0
-            ELSE
-              EXTRACT(isodow FROM sit_date  :: DATE)
-            END
-        AND mwl.price_chart_id = weekly.price_chart_id
+           FROM daily_adjustment_rules AS rul_adj
+           JOIN daily_adjustment_data AS adj_data
+             ON rul_adj.daily_adjustment_datum_id = adj_data.id
+             AND rul_adj.weekday =
+              CASE WHEN EXTRACT(isodow FROM sit_date  :: DATE) = 7 THEN
+                0
+              ELSE
+                EXTRACT(isodow FROM sit_date  :: DATE)
+              END) AS weekly_sit
+           ON weekly_sit.price_chart_id = mwl.price_chart_id
 
         --MOVES BY MOVER ON MOVE DATE
         LEFT JOIN(
@@ -642,9 +641,10 @@ DECLARE
           JOIN price_charts AS pc
             ON pc.id = jb.price_chart_id
             GROUP BY move_date, pc.mover_id) AS jobs
-          ON mwl.mover_id = jobs.mover_id
-        AND mov_date = jobs.move_date) AS availability
-      WHERE CASE WHEN mov_time = 'am' THEN availability.net_am > 0
+        ON mwl.mover_id = jobs.mover_id
+        AND mov_date = jobs.move_date
+        ) AS availability
+        WHERE CASE WHEN mov_time = 'am' THEN availability.net_am > 0
         ELSE availability.net_pm > 0
         END
     );
