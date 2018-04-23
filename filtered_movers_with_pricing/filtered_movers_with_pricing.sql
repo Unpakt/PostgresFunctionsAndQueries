@@ -499,10 +499,6 @@ DECLARE
           RAISE EXCEPTION 'No movers can support storage in transit';
         END IF;
 
---     --FILTER BY SIT AVAILABILITY
---     IF (SELECT storage_move_out_date FROM mp ) IS NOT NULL THEN
---     --TODO
---     END IF;
 
 
     --FILTER BY PHONE REQUEST
@@ -653,6 +649,17 @@ DECLARE
         IF (SELECT COUNT(*) FROM movers_with_location_and_balancing_rate) = 0 THEN
           RAISE EXCEPTION 'No movers are available on this move date';
         END IF;
+
+      --FILTER BY SIT AVAILABILITY
+    IF sit_date IS NOT NULL THEN
+      DELETE FROM movers_with_location_and_balancing_rate WHERE movers_with_location_and_balancing_rate.sit_avail <= 0;
+    END IF;
+
+        --RAISE NO MOVER FOUND ERROR
+        IF (SELECT COUNT(*) FROM movers_with_location_and_balancing_rate) = 0 THEN
+          RAISE EXCEPTION 'No movers are available on this storage move out date';
+        END IF;
+
 
 
     --PRECOMPUTE TRAVEL PLAN
