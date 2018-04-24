@@ -1,6 +1,6 @@
-SELECT * FROM filtered_movers_with_pricing('4e62ab18-0dc1-11e8-12a9-41df8e0f4b38');
+SELECT * FROM filtered_movers_with_pricing('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
-SELECT * FROM comparison_presenter_v4('2b20724e-3d95-11e8-1387-9f764f91206c');
+SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
@@ -1244,7 +1244,22 @@ CREATE FUNCTION comparison_presenter_v4(move_plan_param VARCHAR)
   ) AS
 $func$
 BEGIN
-RETURN QUERY (SELECT
+RETURN QUERY
+(SELECT
+	uniq.branch_property_id, uniq.city_state_label, uniq.consult_only, uniq.dedicated,
+	uniq.maximum_delivery_days, uniq.minimum_delivery_days,	uniq.grade, uniq.id,
+	uniq.is_featured, uniq.logo_url, uniq.mover_special, uniq.name, uniq.number_of_employees,
+	uniq.number_of_trucks, uniq.moving, uniq.packing_cost, uniq.special_handling_cost,
+	uniq.storage_cost, uniq.profile_path, uniq.google_link, uniq.google_number_of_reviews,
+	uniq.google_rating, uniq.google_rounded_rating, uniq.unpakt_link, uniq.unpakt_number_of_reviews,
+	uniq.unpakt_rating, uniq.unpakt_rounded_rating, uniq.yelp_link, uniq.yelp_number_of_reviews,
+	uniq.yelp_rating, uniq.yelp_rounded_rating, uniq.slug, uniq.total_cost, uniq.years_in_business
+FROM
+	(SELECT
+		*,
+		rank() OVER(PARTITION BY all_lines.vendor_id ORDER BY all_lines.total_cost ASC)
+	FROM
+		(SELECT
         bp.id AS branch_property_id,
         CAST(ba.city || ', ' || ba.state AS VARCHAR) AS city_state_label,
         (CASE WHEN pricing.location_type = 'local' THEN
@@ -1261,6 +1276,7 @@ RETURN QUERY (SELECT
         bp.logo_image AS logo_url,
         -1.00 * pricing.mover_special_discount AS mover_special,
         bp.name,
+        bp.vendor_id,
         movers.number_of_employees,
         movers.number_of_trucks,
         pricing.moving_cost_adjusted AS moving,
@@ -1290,7 +1306,9 @@ RETURN QUERY (SELECT
         JOIN service_provider_ratings AS yelp ON yelp.service_provider_id = movers.id AND yelp.service_provider_type = 'Mover'AND yelp.reviewer = 'Yelp'
         JOIN service_provider_ratings AS google ON google.service_provider_id = movers.id AND google.service_provider_type = 'Mover'AND google.reviewer = 'Google'
         JOIN service_provider_ratings AS unpakt ON unpakt.service_provider_id = movers.id AND unpakt.service_provider_type = 'Mover'AND unpakt.reviewer = 'Unpakt'
-       );
+    ) as all_lines
+  ) as uniq WHERE uniq.rank = 1
+);
 END
 $func$ LANGUAGE plpgsql;
 
