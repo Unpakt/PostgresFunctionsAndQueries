@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
+SELECT * FROM filtered_movers_with_pricing('7bc10462-c4ef-11e7-ee90-65cc62bba577');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -785,13 +785,13 @@ DECLARE
 
         --FIGURE OUT RIDICULOUS BOX_DELIVERY_FEE (WHAT ARE THESE PATTERNS???????)
         (CASE box_dow
-          WHEN 1 THEN cb_p_up_pc.box_delivery_fee_monday
-          WHEN 2 THEN cb_p_up_pc.box_delivery_fee_thursday
-          WHEN 3 THEN cb_p_up_pc.box_delivery_fee_wednesday
-          WHEN 4 THEN cb_p_up_pc.box_delivery_fee_thursday
-          WHEN 5 THEN cb_p_up_pc.box_delivery_fee_friday
-          WHEN 6 THEN cb_p_up_pc.box_delivery_fee_saturday
-          WHEN 7 THEN cb_p_up_pc.box_delivery_fee_sunday
+          WHEN 1 THEN COALESCE(cb_p_up_pc.box_delivery_fee_monday,0)
+          WHEN 2 THEN COALESCE(cb_p_up_pc.box_delivery_fee_thursday,0)
+          WHEN 3 THEN COALESCE(cb_p_up_pc.box_delivery_fee_wednesday,0)
+          WHEN 4 THEN COALESCE(cb_p_up_pc.box_delivery_fee_thursday,0)
+          WHEN 5 THEN COALESCE(cb_p_up_pc.box_delivery_fee_friday,0)
+          WHEN 6 THEN COALESCE(cb_p_up_pc.box_delivery_fee_saturday,0)
+          WHEN 7 THEN COALESCE(cb_p_up_pc.box_delivery_fee_sunday,0)
         ELSE 0.00 END)
       ELSE 0.00
       END AS cardboard_cost,
@@ -999,7 +999,22 @@ CREATE TEMP TABLE movers_and_pricing AS (
                 price_charts.interstate_toll
               ELSE
                 0.00
-              END)
+              END) +
+
+              --EXTRA PICK UP COST
+                (CASE WHEN epu_state IS NULL THEN
+                  0.00
+                ELSE
+                  COALESCE((price_charts.extra_stop_value / 100.00),0)
+                END) +
+
+              --EXTRA DROP OFF COST
+                (CASE WHEN edo_state IS NULL THEN
+                  0.00
+                ELSE
+                  COALESCE((price_charts.extra_stop_value / 100.00),0)
+                END)
+
             ) *
 
             --MULTIPLY ABOVE BY BALANCING RATE
@@ -1041,8 +1056,8 @@ CREATE TEMP TABLE movers_and_pricing AS (
           END),2) AS storage_cost,
 
         --PACKING COST ADJUSTED
-          ROUND((((cb_p_up_cost_pc.packing_cost) +
-                  (cb_p_up_cost_pc.unpacking_cost) +
+          ROUND((((COALESCE(cb_p_up_cost_pc.packing_cost,0)) +
+                  (COALESCE(cb_p_up_cost_pc.unpacking_cost,0)) +
                   (CASE WHEN (SELECT follow_up_packing_service_id FROM mp) IN (1,2) OR (SELECT initial_packing_service_id FROM mp) IN (1,2) THEN
                     price_charts.packing_flat_fee
                   ELSE
@@ -1052,7 +1067,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
                 balancing_rate.rate),2) AS packing_cost_adjusted,
 
         --CARDBOARD COST ADJUSTED
-          ROUND(((cb_p_up_cost_pc.cardboard_cost) *
+          ROUND(((COALESCE(cb_p_up_cost_pc.cardboard_cost,0)) *
 
             --BALANCING RATE ON BOX DELIVERY DAY (ICKY)
            (1.00 + (
