@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('b75503ae-7105-11e7-559f-5b1fd053a39a');
+SELECT * FROM filtered_movers_with_pricing('c13bf6e2-7147-11e7-f787-c73d69dff723');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -154,6 +154,19 @@ DECLARE
       JOIN box_types AS bt
       ON mpbi.move_plan_id = mp_id
       AND mpbi.box_type_id = bt.id);
+
+    --FIND MOVE PLAN BOX ITEMS
+    DROP TABLE IF EXISTS mp_bp;
+    CREATE TEMP TABLE mp_bp AS (
+      SELECT
+        mpbp.id as mpbp_id,
+        move_plan_id, box_type_id, quantity,
+        cubic_feet
+      FROM box_purchases as mpbp
+      JOIN box_types AS bt
+      ON mpbp.move_plan_id = mp_id
+      AND mpbp.box_type_id = bt.id
+      AND quantity > 0);
 
     --FIND CRATING ITEMS CUBIC FEET
     DROP TABLE IF EXISTS crating_item_cubic_feet;
@@ -782,9 +795,9 @@ DECLARE
     ON crating_pc.id IN (SELECT crating_mwlabr.latest_pc_id FROM movers_with_location_and_balancing_rate AS crating_mwlabr)
     GROUP BY crating_pc_id);
 
-    --CARDBOARD/PACKING/UNPACKING COST BY PRICE_CHART
-    DROP TABLE IF EXISTS cb_p_up_cost_pc;
-    CREATE TEMP TABLE cb_p_up_cost_pc AS (SELECT
+    --CARDBOARD COST BY PRICE_CHART
+    DROP TABLE IF EXISTS cardboard_cost_pc;
+    CREATE TEMP TABLE cardboard_cost_pc AS (SELECT
 
       --HANDLE BOX DELIVERY
       CASE WHEN (SELECT mp.box_delivery_date FROM MP) IS NOT NULL THEN
@@ -792,16 +805,57 @@ DECLARE
 
         --FIGURE OUT RIDICULOUS BOX_DELIVERY_FEE (WHAT ARE THESE PATTERNS???????)
         (CASE box_dow
-          WHEN 1 THEN COALESCE(cb_p_up_pc.box_delivery_fee_monday,0)
-          WHEN 2 THEN COALESCE(cb_p_up_pc.box_delivery_fee_thursday,0)
-          WHEN 3 THEN COALESCE(cb_p_up_pc.box_delivery_fee_wednesday,0)
-          WHEN 4 THEN COALESCE(cb_p_up_pc.box_delivery_fee_thursday,0)
-          WHEN 5 THEN COALESCE(cb_p_up_pc.box_delivery_fee_friday,0)
-          WHEN 6 THEN COALESCE(cb_p_up_pc.box_delivery_fee_saturday,0)
-          WHEN 7 THEN COALESCE(cb_p_up_pc.box_delivery_fee_sunday,0)
+          WHEN 1 THEN COALESCE(cardboard_pc.box_delivery_fee_monday,0)
+          WHEN 2 THEN COALESCE(cardboard_pc.box_delivery_fee_thursday,0)
+          WHEN 3 THEN COALESCE(cardboard_pc.box_delivery_fee_wednesday,0)
+          WHEN 4 THEN COALESCE(cardboard_pc.box_delivery_fee_thursday,0)
+          WHEN 5 THEN COALESCE(cardboard_pc.box_delivery_fee_friday,0)
+          WHEN 6 THEN COALESCE(cardboard_pc.box_delivery_fee_saturday,0)
+          WHEN 7 THEN COALESCE(cardboard_pc.box_delivery_fee_sunday,0)
         ELSE 0.00 END)
       ELSE 0.00
       END AS cardboard_cost,
+
+      --BALANCING RATE FOR BOX DELIVERY (THIS TRIGGERS ME)
+      COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary) AS box_balancing_rate_primary,
+      COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary) AS box_balancing_rate_secondary,
+      cardboard_pc.id AS cardboard_pc_id
+    FROM mp_bp
+    JOIN price_charts AS cardboard_pc
+    ON cardboard_pc.id IN (SELECT cb_p_up_mwlabr.latest_pc_id FROM movers_with_location_and_balancing_rate AS cb_p_up_mwlabr)
+    JOIN box_type_rates AS btr
+    ON cardboard_pc.id = btr.price_chart_id AND btr.box_type_id = mp_bp.box_type_id
+
+    --BOX DELIVERY ADJUSTMENTS BY DATE
+    LEFT JOIN(
+       SELECT *
+       FROM PUBLIC.daily_adjustments AS day_adj
+       JOIN PUBLIC.daily_adjustment_data AS adj_data
+         ON day_adj.daily_adjustment_datum_id = adj_data.id) AS daily
+    ON box_date  = day
+      AND cardboard_pc.id  = daily.price_chart_id
+
+    --BOX DELIVERY ADJUSTMENTS BY WEEKDAY
+    LEFT JOIN(
+       SELECT *
+       FROM PUBLIC.daily_adjustment_rules AS rul_adj
+       JOIN PUBLIC.daily_adjustment_data AS adj_data
+         ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS weekly
+    ON weekday =
+       CASE WHEN box_dow = 7 THEN
+          0
+        ELSE
+          box_dow
+        END
+    AND cardboard_pc.id  = weekly.price_chart_id
+    GROUP BY
+      cardboard_pc.id,
+      COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary),
+      COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary));
+
+    --PACKING/UNPACKING COST BY PRICE_CHART
+    DROP TABLE IF EXISTS packing_service_cost_pc;
+    CREATE TEMP TABLE packing_service_cost_pc AS (SELECT
 
       --HANDLE PACKING COST (IF SELECTED)
       CASE WHEN (SELECT follow_up_packing_service_id FROM mp) = 1 OR (SELECT initial_packing_service_id FROM mp) = 1
@@ -816,44 +870,15 @@ DECLARE
                 THEN SUM(cents_for_unpacking/100.00 * CAST(quantity AS NUMERIC))
       ELSE 0.00
       END AS unpacking_cost,
-
-      --BALANCING RATE FOR BOX DELIVERY (THIS TRIGGERS ME)
-      COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary) AS box_balancing_rate_primary,
-      COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary) AS box_balancing_rate_secondary,
-      cb_p_up_pc.id AS cb_p_up_pc_id
+      packing_service_pc.id AS packing_service_pc_id
     FROM mp_bi
-    JOIN price_charts AS cb_p_up_pc
-    ON cb_p_up_pc.id IN (SELECT cb_p_up_mwlabr.latest_pc_id FROM movers_with_location_and_balancing_rate AS cb_p_up_mwlabr)
+    JOIN price_charts AS packing_service_pc
+    ON packing_service_pc.id IN (SELECT cb_p_up_mwlabr.latest_pc_id FROM movers_with_location_and_balancing_rate AS cb_p_up_mwlabr)
     JOIN box_type_rates AS btr
-    ON cb_p_up_pc.id = btr.price_chart_id AND btr.box_type_id = mp_bi.box_type_id
-
-    --BOX DELIVERY ADJUSTMENTS BY DATE
-    LEFT JOIN(
-       SELECT *
-       FROM PUBLIC.daily_adjustments AS day_adj
-       JOIN PUBLIC.daily_adjustment_data AS adj_data
-         ON day_adj.daily_adjustment_datum_id = adj_data.id) AS daily
-    ON box_date  = day
-      AND cb_p_up_pc.id  = daily.price_chart_id
-
-    --BOX DELIVERY ADJUSTMENTS BY WEEKDAY
-    LEFT JOIN(
-       SELECT *
-       FROM PUBLIC.daily_adjustment_rules AS rul_adj
-       JOIN PUBLIC.daily_adjustment_data AS adj_data
-         ON rul_adj.daily_adjustment_datum_id = adj_data.id) AS weekly
-    ON weekday =
-       CASE WHEN box_dow = 7 THEN
-          0
-        ELSE
-          box_dow
-        END
-    AND cb_p_up_pc.id  = weekly.price_chart_id
+    ON packing_service_pc.id = btr.price_chart_id AND btr.box_type_id = mp_bi.box_type_id
     GROUP BY
-      cb_p_up_pc.id,
-      cb_p_up_pc.packing_flat_fee,
-      COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary),
-      COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary));
+      packing_service_pc.packing_flat_fee,
+      packing_service_pc.id);
 
     --GET MOVER SPECIAL DISCOUNTS
     DROP TABLE IF EXISTS mover_special_pc;
@@ -1076,8 +1101,8 @@ CREATE TEMP TABLE movers_and_pricing AS (
           END),2) AS storage_cost,
 
         --PACKING COST ADJUSTED
-          ROUND((((COALESCE(cb_p_up_cost_pc.packing_cost,0)) +
-                  (COALESCE(cb_p_up_cost_pc.unpacking_cost,0)) +
+          ROUND((((COALESCE(packing_service_cost_pc.packing_cost,0)) +
+                  (COALESCE(packing_service_cost_pc.unpacking_cost,0)) +
                   (CASE WHEN (SELECT follow_up_packing_service_id FROM mp) IN (1,2) OR (SELECT initial_packing_service_id FROM mp) IN (1,2) THEN
                     price_charts.packing_flat_fee
                   ELSE
@@ -1087,14 +1112,14 @@ CREATE TEMP TABLE movers_and_pricing AS (
                 balancing_rate.rate),2) AS packing_cost_adjusted,
 
         --CARDBOARD COST ADJUSTED
-          ROUND(((COALESCE(cb_p_up_cost_pc.cardboard_cost,0)) *
+          ROUND(((COALESCE(cardboard_cost_pc.cardboard_cost,0)) *
 
             --BALANCING RATE ON BOX DELIVERY DAY (ICKY)
            (1.00 + (
             (CASE WHEN mov_time = 'am' THEN
-              coalesce(cb_p_up_cost_pc.box_balancing_rate_primary,0.00)
+              coalesce(cardboard_cost_pc.box_balancing_rate_primary,0.00)
               ELSE
-              coalesce(cb_p_up_cost_pc.box_balancing_rate_secondary, cb_p_up_cost_pc.box_balancing_rate_primary,0.00)
+              coalesce(cardboard_cost_pc.box_balancing_rate_secondary, cardboard_cost_pc.box_balancing_rate_primary,0.00)
               END
             ) / 100.00))),2) AS cardboard_cost_adjusted,
 
@@ -1155,9 +1180,13 @@ CREATE TEMP TABLE movers_and_pricing AS (
         LEFT JOIN crating_cost_pc
           ON crating_cost_pc.crating_pc_id = mwlabr.latest_pc_id
 
-        --JOIN PRECOMPUTED SPECIAL HANDLING COSTS
-        LEFT JOIN cb_p_up_cost_pc
-          ON cb_p_up_cost_pc.cb_p_up_pc_id = mwlabr.latest_pc_id
+        --JOIN PRECOMPUTED BOX DELIVERY COSTS
+        LEFT JOIN cardboard_cost_pc
+          ON cardboard_cost_pc.cardboard_pc_id = mwlabr.latest_pc_id
+
+        --JOIN PRECOMPUTED PACKING/UNPACKINT COSTS
+        LEFT JOIN packing_service_cost_pc
+          ON packing_service_cost_pc.packing_service_pc_id = mwlabr.latest_pc_id
 
         --JOIN BALANCING RATE
         LEFT JOIN (SELECT
