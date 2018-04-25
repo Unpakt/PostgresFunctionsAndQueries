@@ -870,7 +870,33 @@ CREATE TEMP TABLE movers_and_pricing AS (
   SELECT
 
   --TOTAL
-    total.subtotal + total.mover_special_discount + total.facebook_discount + total.twitter_discount + total.coupon_discount AS total,
+    total.subtotal +
+    total.mover_special_discount +
+    total.facebook_discount +
+    total.twitter_discount +
+    CASE
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
+          (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00 *
+          (total.subtotal - total.mover_special_discount)
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
+          (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00
+      ELSE
+          0
+      END AS total,
+      --COUPON DISCOUNT
+      CASE
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
+          (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00 *
+          (total.subtotal - total.mover_special_discount)
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
+          (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00
+      ELSE
+          0
+      END AS coupon_discount,
     total.*
   FROM (
     SELECT
@@ -906,19 +932,6 @@ CREATE TEMP TABLE movers_and_pricing AS (
       ELSE
           0
       END AS twitter_discount,
-
-      --COUPON DISCOUNT
-      CASE
-      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
-          (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
-          -1.00 / 100.00 *
-          subtotal.subtotal
-      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
-          (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
-          -1.00 / 100.00
-      ELSE
-          0
-      END AS coupon_discount,
       subtotal.*
     FROM(
       SELECT
