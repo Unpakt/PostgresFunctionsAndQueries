@@ -878,7 +878,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
       WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
           (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
           -1.00 / 100.00 *
-          (total.subtotal - total.mover_special_discount)
+          (total.subtotal)
       WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
           (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
           -1.00 / 100.00
@@ -890,7 +890,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
       WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
           (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
           -1.00 / 100.00 *
-          (total.subtotal - total.mover_special_discount)
+          (total.subtotal)
       WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
           (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
           -1.00 / 100.00
