@@ -75,7 +75,7 @@ DECLARE
     DROP TABLE IF EXISTS mp;
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     frozen_pc_id := (SELECT frozen_price_chart_id FROM mp);
-    frozen_mover_id := (SELECT mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
+    frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
     mov_date := (SELECT move_date FROM mp);
     mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp );
     sit_date := (SELECT storage_move_out_date FROM mp);
