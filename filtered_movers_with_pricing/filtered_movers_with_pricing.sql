@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('773125c4-e963-11e7-c6a0-0f461a27ccab');
+SELECT * FROM filtered_movers_with_pricing('b75503ae-7105-11e7-559f-5b1fd053a39a');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -878,7 +878,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
       WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
           (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
           -1.00 / 100.00 *
-          (total.subtotal)
+          (total.subtotal + total.mover_special_discount)
       WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
           (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
           -1.00 / 100.00
@@ -890,7 +890,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
       WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
           (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
           -1.00 / 100.00 *
-          (total.subtotal)
+          (total.subtotal + total.mover_special_discount)
       WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
           (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
           -1.00 / 100.00
