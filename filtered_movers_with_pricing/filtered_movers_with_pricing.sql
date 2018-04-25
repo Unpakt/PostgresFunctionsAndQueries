@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('7bc10462-c4ef-11e7-ee90-65cc62bba577');
+SELECT * FROM filtered_movers_with_pricing('773125c4-e963-11e7-c6a0-0f461a27ccab');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -59,6 +59,7 @@ DECLARE mp_id integer;DECLARE mp_coupon_id integer;DECLARE num_stairs integer;
 DECLARE total_cubic_feet numeric;DECLARE item_cubic_feet numeric;
 DECLARE num_carpentry integer;DECLARE num_crating integer;
 DECLARE box_dow integer;DECLARE box_date date;DECLARE box_cubic_feet numeric;
+DECLARE frozen_pc_id integer; DECLARE frozen_mover_id integer;
 
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
@@ -73,6 +74,8 @@ DECLARE
     mp_id := (SELECT uuidable_id FROM uuids WHERE uuids.uuid = $1 AND uuidable_type = 'MovePlan');
     DROP TABLE IF EXISTS mp;
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
+    frozen_pc_id := (SELECT frozen_price_chart_id FROM mp);
+    frozen_mover_id := (SELECT mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
     mov_date := (SELECT move_date FROM mp);
     mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp );
     sit_date := (SELECT storage_move_out_date FROM mp);
@@ -97,7 +100,11 @@ DECLARE
     CREATE TEMP TABLE potential_movers AS SELECT
         branch_properties.name as mover_name,
         movers.id,
-        latest_pc.latest_pc_id as latest_pc_id,
+        CASE WHEN frozen_mover_id = movers.id THEN
+          frozen_pc_id
+        ELSE
+          latest_pc.latest_pc_id
+        END as latest_pc_id,
         movers.local_consult_only,
         movers.interstate_consult_only
       FROM movers
