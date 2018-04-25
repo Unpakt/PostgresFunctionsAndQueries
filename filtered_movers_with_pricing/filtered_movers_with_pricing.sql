@@ -1059,7 +1059,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
           (CASE WHEN do_state IS NULL OR (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
 
             --CALCULATE MULTIPLIER
-            (CASE WHEN do_state IS NULL AND (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+            (CASE WHEN do_state IS NULL AND (SELECT storage_move_out_date FROM mp) IS NULL THEN
               1.00
             WHEN DATE_PART('day', CAST((SELECT mp.storage_move_out_date FROM mp) AS timestamp) - CAST(mov_date AS timestamp)) <= 14 THEN
               0.50
