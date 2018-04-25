@@ -964,7 +964,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
           ROUND(
 
             --TRUCK COST
-            (
+            ((
               (CASE WHEN mwlabr.location_type = 'local' AND (SELECT storage_move_out_date FROM mp) IS NOT NULL  THEN
                 Cast(price_charts.cents_per_truck / 100.00 * 2.00 as numeric)
               ELSE
@@ -994,13 +994,6 @@ CREATE TEMP TABLE movers_and_pricing AS (
                 END)
               END) +
 
-              --INTERSTATE TOLL COST
-              (CASE WHEN mwlabr.location_type = 'local' AND (SELECT COUNT(DISTINCT(state)) FROM mp_addresses) > 1 THEN
-                price_charts.interstate_toll
-              ELSE
-                0.00
-              END) +
-
               --EXTRA PICK UP COST
                 (CASE WHEN epu_state IS NULL THEN
                   0.00
@@ -1018,7 +1011,14 @@ CREATE TEMP TABLE movers_and_pricing AS (
             ) *
 
             --MULTIPLY ABOVE BY BALANCING RATE
-            balancing_rate.rate,
+            balancing_rate.rate) +
+
+              --INTERSTATE TOLL COST
+              (CASE WHEN mwlabr.location_type = 'local' AND (SELECT COUNT(DISTINCT(state)) FROM mp_addresses) > 1 THEN
+                price_charts.interstate_toll
+              ELSE
+                0.00
+              END),
           2) AS travel_cost_adjusted,
 
         --SPECIAL HANDLING COST ADJUSTED
