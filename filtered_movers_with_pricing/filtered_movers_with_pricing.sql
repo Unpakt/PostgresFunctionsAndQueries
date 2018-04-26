@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('c13bf6e2-7147-11e7-f787-c73d69dff723');
+SELECT * FROM filtered_movers_with_pricing('6a2f7dea-709a-11e7-7e9e-5b1fd053a39a');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -197,9 +197,9 @@ DECLARE
     --https://www.postgresql.org/docs/current/static/sql-select.html Description #8
     DROP TABLE IF EXISTS mp_addresses;
     CREATE TEMP TABLE mp_addresses AS
-      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'pick_up' LIMIT 1) UNION
-      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_pick_up' LIMIT 1) UNION
-      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'drop_off' LIMIT 1) UNION
+      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'pick_up' LIMIT 1) UNION ALL
+      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_pick_up' LIMIT 1) UNION ALL
+      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'drop_off' LIMIT 1) UNION ALL
       (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_drop_off' LIMIT 1);
 
     --HANDLE WAREHOSUE DESTINATIONS
