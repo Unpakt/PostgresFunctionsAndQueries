@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('6a2f7dea-709a-11e7-7e9e-5b1fd053a39a');
+SELECT * FROM filtered_movers_with_pricing('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7','{1618,679,297,2075}');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -20,9 +20,9 @@ RETURN COALESCE(
         LIMIT 1));
 END
 $func$ LANGUAGE plpgsql;
-DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER);
-CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER DEFAULT NULL)
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[]);
+CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL)
 RETURNS TABLE(
   total numeric,
   mover_special_discount numeric, facebook_discount numeric,
@@ -118,7 +118,7 @@ DECLARE
               is_hidden = false
             END)
         AND (CASE WHEN mover_param IS NOT NULL THEN
-             movers.id = mover_param
+             movers.id = any(mover_param)
             ELSE 1=1 END)
       JOIN (SELECT
               id as latest_pc_id,
@@ -521,25 +521,25 @@ DECLARE
 
 
 
-    --FILTER BY PHONE REQUEST
-    IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'InHomeRequest') > 0 THEN
-      DELETE FROM movers_with_location WHERE movers_with_location.onsites = false;
-    END IF;
-
-        --RAISE NO MOVER FOUND ERROR
-        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-          RAISE EXCEPTION 'No movers can support phone requests';
-        END IF;
-
-    --FILTER BY ONSITE REQUEST
-    IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'PhoneRequest') > 0 THEN
-      DELETE FROM movers_with_location WHERE movers_with_location.callback = false;
-    END IF;
-
-        --RAISE NO MOVER FOUND ERROR
-        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-          RAISE EXCEPTION 'No movers can support onsite requests';
-        END IF;
+--     --FILTER BY PHONE REQUEST
+--     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'InHomeRequest') > 0 THEN
+--       DELETE FROM movers_with_location WHERE movers_with_location.onsites = false;
+--     END IF;
+--
+--         --RAISE NO MOVER FOUND ERROR
+--         IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+--           RAISE EXCEPTION 'No movers can support phone requests';
+--         END IF;
+--
+--     --FILTER BY ONSITE REQUEST
+--     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'PhoneRequest') > 0 THEN
+--       DELETE FROM movers_with_location WHERE movers_with_location.callback = false;
+--     END IF;
+--
+--         --RAISE NO MOVER FOUND ERROR
+--         IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+--           RAISE EXCEPTION 'No movers can support onsite requests';
+--         END IF;
 
     --FILTER BY CRATING
     IF num_crating > 0 THEN
