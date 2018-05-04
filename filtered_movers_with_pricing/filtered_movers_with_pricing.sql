@@ -20,6 +20,7 @@ RETURN COALESCE(
         LIMIT 1));
 END
 $func$ LANGUAGE plpgsql;
+
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[]);
 CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL)
