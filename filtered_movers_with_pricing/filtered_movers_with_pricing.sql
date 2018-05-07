@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('51178dbe-5a62-11e7-13bf-5b1fd053a39a');
+SELECT * FROM filtered_movers_with_pricing('cc28f41a-5ebe-11e7-cb85-5b1fd053a39a');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -385,7 +385,7 @@ DECLARE
                   price_charts.state_authority_2_state = pu_state OR
                   price_charts.state_authority_3_state = pu_state OR
                   price_charts.state_authority_4_state = pu_state )
-              AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)),pu_earth)
+--               AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)),pu_earth)
             END);
 
         --RAISE NO MOVER FOUND ERROR
