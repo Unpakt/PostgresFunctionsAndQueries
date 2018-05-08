@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('cc28f41a-5ebe-11e7-cb85-5b1fd053a39a');
+SELECT * FROM filtered_movers_with_pricing('7543f974-5a90-11e7-26a3-c73d69dff723');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -61,6 +61,7 @@ DECLARE total_cubic_feet numeric;DECLARE item_cubic_feet numeric;
 DECLARE num_carpentry integer;DECLARE num_crating integer;
 DECLARE box_dow integer;DECLARE box_date date;DECLARE box_cubic_feet numeric;
 DECLARE frozen_pc_id integer; DECLARE frozen_mover_id integer;
+DECLARE frozen_mover_latest_pc_id integer;
 
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
@@ -77,6 +78,7 @@ DECLARE
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     frozen_pc_id := (SELECT frozen_price_chart_id FROM mp);
     frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
+    frozen_mover_latest_pc_id := (SELECT price_charts.id FROM price_charts WHERE price_charts.mover_id = frozen_mover_id ORDER BY created_at DESC LIMIT 1);
     mov_date := (SELECT move_date FROM mp);
     mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp );
     sit_date := (SELECT storage_move_out_date FROM mp);
@@ -656,18 +658,39 @@ DECLARE
           COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary) AS balancing_rate_secondary,
 
           --AVAILABILITY CALCULATIONS
-          CASE WHEN COALESCE(daily.capacity_secondary, weekly.capacity_secondary) IS NULL
+          CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
+	          CASE WHEN COALESCE(frz_daily.capacity_secondary, frz_weekly.capacity_secondary) IS NULL
+            THEN COALESCE(frz_daily.capacity_primary, frz_weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+	          ELSE COALESCE(frz_daily.capacity_secondary, frz_weekly.capacity_secondary) - COALESCE(pm, 0)
+            END
+          ELSE
+	          CASE WHEN COALESCE(daily.capacity_secondary, weekly.capacity_secondary) IS NULL
             THEN COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-          ELSE COALESCE(daily.capacity_secondary, weekly.capacity_secondary) - COALESCE(pm, 0)
-            END as net_pm,
-          CASE WHEN COALESCE(daily.capacity_secondary, weekly.capacity_secondary) IS NULL
+	          ELSE COALESCE(daily.capacity_secondary, weekly.capacity_secondary) - COALESCE(pm, 0)
+            END
+          END AS net_pm,
+          CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
+	          CASE WHEN COALESCE(frz_daily.capacity_secondary, frz_weekly.capacity_secondary) IS NULL
+            THEN COALESCE(frz_daily.capacity_primary, frz_weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+	          ELSE COALESCE(frz_daily.capacity_primary, frz_weekly.capacity_primary) - COALESCE(am, 0)
+            END
+          ELSE
+	          CASE WHEN COALESCE(daily.capacity_secondary, weekly.capacity_secondary) IS NULL
             THEN COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-          ELSE COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0)
-            END as net_am,
-          CASE WHEN COALESCE(daily_sit.capacity_secondary, weekly_sit.capacity_secondary) IS NULL
+	          ELSE COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0)
+            END
+          END AS net_am,
+          CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
+	          CASE WHEN COALESCE(frz_daily_sit.capacity_secondary, frz_weekly_sit.capacity_secondary) IS NULL
+            THEN COALESCE(frz_daily.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+	          ELSE COALESCE(frz_daily.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(am, 0)
+            END
+          ELSE
+	          CASE WHEN COALESCE(daily_sit.capacity_secondary, weekly_sit.capacity_secondary) IS NULL
             THEN COALESCE(daily.capacity_primary, weekly_sit.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-          ELSE COALESCE(daily.capacity_primary, weekly_sit.capacity_primary) - COALESCE(am, 0)
-            END sit_avail
+	          ELSE COALESCE(daily.capacity_primary, weekly_sit.capacity_primary) - COALESCE(am, 0)
+            END
+          END AS sit_avail
         FROM movers_with_location as mwl
 
         --ADJUSTMENTS BY DATE
@@ -714,6 +737,55 @@ DECLARE
                 EXTRACT(isodow FROM sit_date  :: DATE)
               END) AS weekly_sit
            ON weekly_sit.price_chart_id = mwl.price_chart_id
+
+        --ADJUSTMENTS BY DATE FOR FROZEN MOVER
+        LEFT JOIN(
+           SELECT *
+           FROM daily_adjustments AS day_adj
+           JOIN daily_adjustment_data AS adj_data
+             ON day_adj.daily_adjustment_datum_id = adj_data.id
+             AND day_adj.day = mov_date) AS frz_daily
+           ON frozen_pc_id = mwl.price_chart_id
+           AND frz_daily.price_chart_id = frozen_mover_latest_pc_id
+
+        --ADJUSTMENTS BY WEEKDAY FOR FROZEN MOVER
+        LEFT JOIN(SELECT *
+           FROM daily_adjustment_rules AS rul_adj
+           JOIN daily_adjustment_data AS adj_data
+             ON rul_adj.daily_adjustment_datum_id = adj_data.id
+             AND rul_adj.weekday =
+               CASE WHEN EXTRACT(isodow FROM mov_date :: DATE) = 7 THEN
+                  0
+                ELSE
+                  EXTRACT(isodow FROM mov_date :: DATE)
+                END) AS frz_weekly
+           ON frozen_pc_id = mwl.price_chart_id
+           AND frz_weekly.price_chart_id = frozen_mover_latest_pc_id
+
+        --SIT ADJUSTMENTS BY DATE FOR FROZEN MOVER
+        LEFT JOIN(
+           SELECT *
+           FROM daily_adjustments AS day_adj
+           JOIN daily_adjustment_data AS adj_data
+             ON day_adj.daily_adjustment_datum_id = adj_data.id
+             AND day_adj.day = sit_date) AS frz_daily_sit
+           ON frozen_pc_id = mwl.price_chart_id
+           AND frz_daily_sit.price_chart_id = frozen_mover_latest_pc_id
+
+        --SIT ADJUSTMENTS BY WEEKDAY FOR FROZEN MOVER
+        LEFT JOIN(
+           SELECT *
+           FROM daily_adjustment_rules AS rul_adj
+           JOIN daily_adjustment_data AS adj_data
+             ON rul_adj.daily_adjustment_datum_id = adj_data.id
+             AND rul_adj.weekday =
+              CASE WHEN EXTRACT(isodow FROM sit_date  :: DATE) = 7 THEN
+                0
+              ELSE
+                EXTRACT(isodow FROM sit_date  :: DATE)
+              END) AS frz_weekly_sit
+           ON frozen_pc_id = mwl.price_chart_id
+           AND frz_weekly_sit.price_chart_id = frozen_mover_latest_pc_id
 
         --MOVES BY MOVER ON MOVE DATE
         LEFT JOIN(
