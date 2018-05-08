@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('7543f974-5a90-11e7-26a3-c73d69dff723');
+SELECT * FROM filtered_movers_with_pricing('ec1ba5d0-5ccd-11e7-5883-5b1fd053a39a');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -331,6 +331,7 @@ DECLARE
             IN (SELECT movers_by_haul.mover_id FROM movers_by_haul
               JOIN price_charts
               ON price_charts.id = movers_by_haul.latest_pc_id
+              AND movers_by_haul.local_consult_only = FALSE
               AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT earth_distance(COALESCE(do_earth,movers_by_haul.mover_earth),pu_earth)));
           END IF;
 
@@ -402,6 +403,7 @@ DECLARE
             IN (SELECT movers_by_haul.mover_id FROM movers_by_haul
               JOIN price_charts
               ON price_charts.id = movers_by_haul.latest_pc_id
+              AND movers_by_haul.local_consult_only = FALSE
               AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT earth_distance(COALESCE(do_earth,movers_by_haul.mover_earth),pu_earth)));
           END IF;
 
