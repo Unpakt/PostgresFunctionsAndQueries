@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('ec1ba5d0-5ccd-11e7-5883-5b1fd053a39a');
+SELECT * FROM filtered_movers_with_pricing('d2314430-6ffc-11e7-a29d-5b1fd053a39a');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -7,17 +7,22 @@ CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
   RETURNS numeric AS
 $func$
 BEGIN
-RETURN COALESCE(
-        (SELECT distance_in_miles
-        FROM driving_distances
-        WHERE (pick_up_hash = pick_up AND drop_off_hash = drop_off)
-        ORDER BY created_at DESC
-        LIMIT 1),
-        (SELECT distance_in_miles
-        FROM driving_distances
-        WHERE (pick_up_hash = drop_off AND drop_off_hash = pick_up)
-        ORDER BY created_at DESC
-        LIMIT 1));
+RETURN
+CASE WHEN pick_up = drop_off THEN
+	0
+ELSE
+	COALESCE(
+  (SELECT distance_in_miles
+  FROM driving_distances
+  WHERE (pick_up_hash = pick_up AND drop_off_hash = drop_off)
+  ORDER BY created_at DESC
+  LIMIT 1),
+  (SELECT distance_in_miles
+  FROM driving_distances
+  WHERE (pick_up_hash = drop_off AND drop_off_hash = pick_up)
+  ORDER BY created_at DESC
+  LIMIT 1))
+END;
 END
 $func$ LANGUAGE plpgsql;
 
