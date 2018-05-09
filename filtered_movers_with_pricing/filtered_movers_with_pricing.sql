@@ -1,4 +1,4 @@
-SELECT * FROM filtered_movers_with_pricing('d2314430-6ffc-11e7-a29d-5b1fd053a39a');
+SELECT * FROM filtered_movers_with_pricing('f04d6c28-5206-11e7-46b4-5b1fd053a39a');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('7ac4fa58-47e1-11e8-f3aa-d3e69c576cf7');
 
@@ -81,7 +81,7 @@ DECLARE
     mp_id := (SELECT uuidable_id FROM uuids WHERE uuids.uuid = $1 AND uuidable_type = 'MovePlan');
     DROP TABLE IF EXISTS mp;
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
-    frozen_pc_id := (SELECT frozen_price_chart_id FROM mp);
+    frozen_pc_id := COALESCE((SELECT price_chart_id FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1),(SELECT frozen_price_chart_id FROM mp));
     frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
     frozen_mover_latest_pc_id := (SELECT price_charts.id FROM price_charts WHERE price_charts.mover_id = frozen_mover_id ORDER BY created_at DESC LIMIT 1);
     mov_date := (SELECT move_date FROM mp);
@@ -836,7 +836,16 @@ DECLARE
 
     --PRECOMPUTE TRAVEL PLAN
     DROP TABLE IF EXISTS travel_plan_miles;
-    CREATE TEMP TABLE travel_plan_miles AS (SELECT
+    CREATE TEMP TABLE travel_plan_miles AS
+    (SELECT
+      travel_plans.latest_pc_id,
+      CASE when travel_plans.distance_minus_free < 0 THEN
+        0
+      ELSE
+        travel_plans.distance_minus_free
+      END as distance_minus_free
+      FROM
+    (SELECT
         mwlabr.latest_pc_id,
 
         --WAREHOUSE TO PICK UP DISTANCE
@@ -931,7 +940,7 @@ DECLARE
        FROM movers_with_location_and_balancing_rate AS mwlabr
         JOIN price_charts
         ON mwlabr.latest_pc_id = price_charts.id
-    );
+    ) AS travel_plans );
 
     --CRATING COST BY PRICE_CHART
     DROP TABLE IF EXISTS crating_cost_pc;
