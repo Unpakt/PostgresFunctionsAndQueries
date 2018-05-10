@@ -1,7 +1,7 @@
 DROP FUNCTION IF EXISTS potential_movers(VARCHAR, INTEGER[]);
 
 CREATE FUNCTION potential_movers(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL)
-RETURNS TABLE(mover_id integer) AS $$
+RETURNS int[] AS $$
 
 --DEFINE GENERAL VARIABLES
 DECLARE mov_date date;DECLARE mov_time varchar;DECLARE sit_date date;
@@ -770,7 +770,7 @@ DECLARE
       DELETE FROM movers_with_location_and_balancing_rate WHERE movers_with_location_and_balancing_rate.sit_avail <= 0;
     END IF;
 
-RETURN QUERY SELECT movers_with_location_and_balancing_rate.mover_id FROM movers_with_location_and_balancing_rate;
+RETURN (SELECT array_agg(movers_with_location_and_balancing_rate.mover_id) FROM movers_with_location_and_balancing_rate);
 
 END; $$
 LANGUAGE plpgsql;
