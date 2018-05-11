@@ -1,17 +1,10 @@
-SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71','{679}');
-
-
+SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
-
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{679}');
-
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
-SELECT * FROM comparison_presenter_v4('fe884282-547a-11e8-89ac-016ea2b9fd71');
-
-SELECT * FROM travel_plan_miles;
-
+SELECT * FROM comparison_presenter_v4('1bd93cba-552a-11e8-8aac-016ea2b9fd71',null,true);
 
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
@@ -1442,8 +1435,8 @@ END; $$
 LANGUAGE plpgsql;
 
 
-DROP FUNCTION IF EXISTS comparison_presenter_v4(VARCHAR);
-CREATE FUNCTION comparison_presenter_v4(move_plan_param VARCHAR)
+DROP FUNCTION IF EXISTS comparison_presenter_v4(VARCHAR,INT[],BOOLEAN);
+CREATE FUNCTION comparison_presenter_v4(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false)
   RETURNS TABLE(
   branch_property_id integer,
   city_state_label varchar,
@@ -1537,7 +1530,7 @@ FROM
         bp.slug AS slug,
         pricing.total AS total_cost,
         CAST(GREATEST((DATE_PART('year',now()) - COALESCE(bp.year_founded,DATE_PART('year',now()))),1) AS INTEGER) AS years_in_business
-        FROM filtered_movers_with_pricing(move_plan_param) AS pricing
+        FROM filtered_movers_with_pricing(move_plan_param,mover_param,select_from_temp) AS pricing
         JOIN movers ON movers.id = pricing.mover_id
         JOIN branch_properties AS bp ON bp.branchable_id = movers.id AND branchable_type = 'Mover'
         JOIN base_addresses AS ba ON bp.id = ba.branch_property_id
