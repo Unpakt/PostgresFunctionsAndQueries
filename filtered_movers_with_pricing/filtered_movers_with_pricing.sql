@@ -35,7 +35,7 @@ DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN
 CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false)
 RETURNS TABLE(
   total numeric,
-  mover_special_discount numeric, facebook_discount numeric,
+  facebook_discount numeric, mover_special_discount numeric,
   twitter_discount numeric, coupon_discount numeric,
   subtotal numeric,
   moving_cost_adjusted numeric, travel_cost_adjusted numeric,
@@ -1542,6 +1542,3 @@ FROM
 );
 END
 $func$ LANGUAGE plpgsql;
-
-
-
