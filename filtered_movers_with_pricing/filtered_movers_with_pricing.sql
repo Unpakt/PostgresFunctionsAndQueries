@@ -32,7 +32,8 @@ $func$ LANGUAGE plpgsql;
 
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN);
-CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false)
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN);
+CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false, for_bid BOOLEAN DEFAULT false)
 RETURNS TABLE(
   total numeric,
   facebook_discount numeric, mover_special_discount numeric,
@@ -818,7 +819,10 @@ DECLARE
 	        ON mwl.mover_id = jobs.mover_id
 	        AND mov_date = jobs.move_date
 	        ) AS availability
-	        WHERE CASE WHEN mov_time = 'am' THEN availability.net_am > 0
+	        WHERE
+	        CASE
+	        WHEN for_bid = TRUE THEN 1=1
+	        WHEN mov_time = 'am' THEN availability.net_am > 0
 	        ELSE availability.net_pm > 0
 	        END
 	    );
