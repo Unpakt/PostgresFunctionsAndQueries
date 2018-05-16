@@ -13,7 +13,7 @@ DECLARE edo_state varchar;DECLARE edo_earth earth;
 DECLARE intrastate boolean;
 
 DECLARE pc_earth varchar;DECLARE pc_state varchar;
-DECLARE pc_us_dot varchar;DECLARE pc_usa_interstate_moves varchar
+DECLARE pc_us_dot boolean;DECLARE pc_usa_interstate_moves boolean;
 DECLARE pc_range numeric;DECLARE pc_lat numeric; DECLARE pc_long numeric;
 DECLARE pc_state_authority_1_state varchar;
 DECLARE pc_state_authority_2_state varchar;
@@ -46,55 +46,44 @@ DECLARE
     intrastate := (SELECT
       (pu_state = COALESCE(do_state,pc_state)) AND
       CASE WHEN epu_geo IS NOT NULL THEN (pu_state = epu_state) ELSE TRUE END AND
-      CASE WHEN edu_geo IS NOT NULL THEN (pu_state = edo_state) ELSE TRUE END
+      CASE WHEN edo_geo IS NOT NULL THEN (pu_state = edo_state) ELSE TRUE END
     );
+    pc_us_dot := (SELECT us_dot <> '' OR us_dot IS NOT NULL FROM price_charts WHERE id = price_chart_id);
+    pc_usa_interstate_moves := (SELECT usa_interstate_moves = 't' FROM price_charts WHERE id = price_chart_id);
+    pc_range := (SELECT range * 1609.34 FROM price_charts WHERE id = price_chart_id);
+    pc_lat := (SELECT latitude FROM price_charts WHERE id = price_chart_id);
+    pc_long := (SELECT longitude FROM price_charts WHERE id = price_chart_id);
+    pc_state_authority_1_state := (SELECT state_authority_1_state FROM price_charts WHERE id = price_chart_id);
+    pc_state_authority_2_state := (SELECT state_authority_2_state FROM price_charts WHERE id = price_chart_id);
+    pc_state_authority_3_state := (SELECT state_authority_3_state FROM price_charts WHERE id = price_chart_id);
+    pc_state_authority_4_state := (SELECT state_authority_4_state FROM price_charts WHERE id = price_chart_id);
 
 		DROP TABLE IF EXISTS address_errors;
 		CREATE TEMP TABLE address_errors (errors varchar);
 
-    --INTERSTATE MOVES
+
     IF intrastate = false THEN
-        IF price_charts.us_dot IS NOT NULL
-            AND price_charts.us_dot <> ''
-            AND price_charts.usa_interstate_moves = 't'
-
-            --PICK UP IN RANGE
-            AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
-                ll_to_earth(price_charts.latitude, price_charts.longitude),
-                pu_earth)))
+        IF
+          false = (pc_us_dot
+          AND pc_usa_interstate_moves
+          AND pc_range >= (SELECT * FROM earth_distance(ll_to_earth(pc_lat, pc_long), pu_earth)))
 				THEN
-          INSERT INTO address_errors 'This mover does not support';
+          INSERT INTO address_errors VALUES ('This mover does not support this pick up location');
         END IF;
-
-    --INTRASTATE MOVES
     ELSE
-        FROM potential_movers
-          JOIN price_charts
-            ON price_charts.id = potential_movers.latest_pc_id
+        IF
+	        false = ((
+	          pc_state_authority_2_state = pu_state OR
+	          pc_state_authority_2_state = pu_state OR
+	          pc_state_authority_3_state = pu_state OR
+	          pc_state_authority_4_state= pu_state
+	        )
+	        AND pc_range >= (SELECT * FROM earth_distance(ll_to_earth(pc_lat, pc_long), pu_earth)))
+        THEN
+					INSERT INTO address_errors VALUES ('This mover does not support this pick up location')
+				END IF;
+		END IF;
 
-            --INTRASTATE CERTIFICATION
-            AND price_charts.local_moves = true
-            AND (price_charts.state_authority_1_state = pu_state OR
-                 price_charts.state_authority_2_state = pu_state OR
-                 price_charts.state_authority_3_state = pu_state OR
-                 price_charts.state_authority_4_state = pu_state )
-
-            --PICK UP IN RANGE
-            AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
-                ll_to_earth(price_charts.latitude, price_charts.longitude),
-                pu_earth))
-
-            --LESS THAN MAX CUBIC FEET
-            AND (price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet)
-          JOIN additional_services
-            ON additional_services.price_chart_id = price_charts.id
-          JOIN storage_details
-            ON storage_details.additional_services_id = additional_services.id;
-
-        --RAISE NO MOVER FOUND ERROR
-        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
-          RAISE EXCEPTION 'No in state movers support this pick up address or can carry such a large amount';
-        END IF;
             --CHECK FOR MINIMUM DISTANCE IN PA AND IL
           IF pu_state in ('IL', 'PA') THEN
             DELETE FROM movers_by_haul
