@@ -19,6 +19,8 @@ DECLARE pc_state_authority_1_state varchar;
 DECLARE pc_state_authority_2_state varchar;
 DECLARE pc_state_authority_3_state varchar;
 DECLARE pc_state_authority_4_state varchar;
+DECLARE pc_minimum_job_distance numeric;
+DECLARE pc_extra_stop_enabled BOOLEAN;
 
 DECLARE
   BEGIN
@@ -57,126 +59,31 @@ DECLARE
     pc_state_authority_2_state := (SELECT state_authority_2_state FROM price_charts WHERE id = price_chart_id);
     pc_state_authority_3_state := (SELECT state_authority_3_state FROM price_charts WHERE id = price_chart_id);
     pc_state_authority_4_state := (SELECT state_authority_4_state FROM price_charts WHERE id = price_chart_id);
+    pc_minimum_job_distance := (SELECT minimum_job_distance * 1609.34 FROM price_charts WHERE id = price_chart_id);
+    pc_extra_stop_enabled := (SELECT extra_stop_enabled FROM price_charts WHERE id = price_chart_id);
 
 		DROP TABLE IF EXISTS address_errors;
 		CREATE TEMP TABLE address_errors (errors varchar);
 
 
-    IF intrastate = false THEN
-        IF
-          false = (pc_us_dot
-          AND pc_usa_interstate_moves
-          AND pc_range >= (SELECT * FROM earth_distance(ll_to_earth(pc_lat, pc_long), pu_earth)))
-				THEN
-          INSERT INTO address_errors VALUES ('This mover does not support this pick up location');
-        END IF;
-    ELSE
-        IF
-	        false = ((
-	          pc_state_authority_2_state = pu_state OR
-	          pc_state_authority_2_state = pu_state OR
-	          pc_state_authority_3_state = pu_state OR
-	          pc_state_authority_4_state= pu_state
-	        )
-	        AND pc_range >= (SELECT * FROM earth_distance(ll_to_earth(pc_lat, pc_long), pu_earth)))
-        THEN
-					INSERT INTO address_errors VALUES ('This mover does not support this pick up location')
-				END IF;
+		IF  pc_range >= (SELECT * FROM earth_distance(pc_earth, pu_earth)) THEN
+			INSERT INTO address_errors VALUES ('Pick up location is out of range');
 		END IF;
 
-            --CHECK FOR MINIMUM DISTANCE IN PA AND IL
-          IF pu_state in ('IL', 'PA') THEN
-            DELETE FROM movers_by_haul
-            WHERE movers_by_haul.mover_id
-            IN (SELECT movers_by_haul.mover_id FROM movers_by_haul
-              JOIN price_charts
-              ON price_charts.id = movers_by_haul.latest_pc_id
-              AND movers_by_haul.local_consult_only = FALSE
-              AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT earth_distance(COALESCE(do_earth,movers_by_haul.mover_earth),pu_earth)));
-          END IF;
-
-        --RAISE NO MOVER FOUND ERROR
-        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
-          RAISE EXCEPTION 'Moves in IL or PA must exceed the minimum distance';
-        END IF;
-    ELSE
-
-      --MIS ELIGIBILITY
-        INSERT INTO movers_by_haul SELECT
-          potential_movers.mover_name, potential_movers.id AS mover_id,
-          price_charts.range as pick_up_mileage, price_charts.drop_off_mileage,
-          price_charts.extra_stop_enabled,
-          additional_services.packing,additional_services.unpacking, additional_services.box_delivery,
-          additional_services.piano, additional_services.storage, additional_services.onsites,additional_services.callback,
-          additional_services.crating,additional_services.disassembly_assembly,
-          additional_services.wall_dismounting, price_charts.box_delivery_range,
-          storage_details.storage_in_transit, storage_details.warehousing,
-          price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
-          price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
-          (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
-          potential_movers.local_consult_only, potential_movers.interstate_consult_only
-        FROM potential_movers
-          JOIN price_charts
-            ON price_charts.id = potential_movers.latest_pc_id
-          JOIN zip_codes
-            ON price_charts.zip = zip_codes.zip
-
-            --PICK UP IN RANGE
-            AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
-                ll_to_earth(price_charts.latitude, price_charts.longitude),
-                pu_earth))
-
-            --LESS THAN MAX CUBIC FEET
-            AND (price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet)
-          JOIN additional_services
-            ON additional_services.price_chart_id = price_charts.id
-          JOIN storage_details
-            ON storage_details.additional_services_id = additional_services.id
-
-          --FILTERS TO HANDLE IN/OUT OF STATE
-          WHERE(
-            CASE WHEN zip_codes.state <> pu_state THEN
-            --INTERSTATE CERTIFICATION
-              price_charts.us_dot IS NOT NULL
-              AND price_charts.us_dot <> ''
-              AND price_charts.usa_interstate_moves = 't'
-            WHEN zip_codes.state = pu_state THEN
-
-            --INTRASTATE CERTIFICATION
-              price_charts.local_moves = true
-              AND (price_charts.state_authority_1_state = pu_state OR
-                  price_charts.state_authority_2_state = pu_state OR
-                  price_charts.state_authority_3_state = pu_state OR
-                  price_charts.state_authority_4_state = pu_state )
---               AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)),pu_earth)
-            END);
-
-        --RAISE NO MOVER FOUND ERROR
-        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
-          RAISE EXCEPTION 'No movers support this storage pick up address';
-        END IF;
-
-            --CHECK FOR MINIMUM DISTANCE IN PA AND IL
-          IF pu_state in ('IL', 'PA') THEN
-            DELETE FROM movers_by_haul
-            WHERE movers_by_haul.mover_id
-            IN (SELECT movers_by_haul.mover_id FROM movers_by_haul
-              JOIN price_charts
-              ON price_charts.id = movers_by_haul.latest_pc_id
-              AND movers_by_haul.local_consult_only = FALSE
-              AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT earth_distance(COALESCE(do_earth,movers_by_haul.mover_earth),pu_earth)));
-          END IF;
-
-        --RAISE NO MOVER FOUND ERROR
-        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
-          RAISE EXCEPTION 'Moves in IL or PA must exceed the minimum distance';
-        END IF;
-
+    IF intrastate = false AND ( pc_us_dot = false OR pc_usa_interstate_moves = false) THEN
+      INSERT INTO address_errors VALUES ('This mover does not support interstate moves');
     END IF;
 
-    --FILTER BY EXTRA PICK UP
-    IF (SELECT extra_pick_up_enabled FROM mp) = true THEN
-      DELETE FROM movers_by_haul WHERE (SELECT * FROM earth_distance(epu_earth,movers_by_haul.mover_earth)) > movers_by_haul.pick_up_mileage * 1609.34;
+    IF intrastate = true AND pc_state_authority_2_state <> pu_state AND pc_state_authority_2_state <> pu_state AND pc_state_authority_3_state <> pu_state AND pc_state_authority_4_state <> pu_state THEN
+      INSERT INTO address_errors VALUES ('This mover does not support this state');
+		END IF;
+
+		IF  pu_state in ('IL', 'PA') AND pc_minimum_job_distance >= (SELECT earth_distance(COALESCE(do_earth, pc_earth),pu_earth)) THEN
+			INSERT INTO address_errors VALUES ('This mover does not support this pick up location');
+    END IF;
+
+    IF epu_geo IS NOT NULL AND ((SELECT FROM earth_distance(epu_earth, pc_earth)) > pc_range OR pc_extra_stop_enabled) THEN
+			INSERT INTO address_errors VALUES ('This mover does not support this extra pick up location');
     END IF;
 
     --FIND LOCAL MOVERS
