@@ -1,8 +1,5 @@
 
 SELECT * FROM validate_addresses(20644,20644,14457);
-
-SELECT * FROM all_pc_locations;
-
 DROP FUNCTION IF EXISTS validate_addresses(integer,integer,integer,integer,integer);
 CREATE FUNCTION validate_addresses(pu_geo integer, do_geo integer, pc_id integer, epu_geo integer default NULL, edo_geo integer default NULL)
 RETURNS TABLE(errors VARCHAR) AS $$
