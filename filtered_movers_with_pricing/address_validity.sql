@@ -2,7 +2,7 @@
 SELECT * FROM validate_addresses(3423432,3423423,43242,23442,1);
 
 DROP FUNCTION IF EXISTS validate_addresses(integer,integer,integer,integer,integer);
-CREATE FUNCTION validate_addresses(pu_geo integer, do_geo integer, price_chart_id integer, epu_geo integer default NULL, edo_geo integer default NULL)
+CREATE FUNCTION validate_addresses(pu_geo integer, do_geo integer, pc_id integer, epu_geo integer default NULL, edo_geo integer default NULL)
 RETURNS TABLE(errors VARCHAR) AS $$
 
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
@@ -21,15 +21,16 @@ DECLARE pc_state_authority_3_state varchar;
 DECLARE pc_state_authority_4_state varchar;
 DECLARE pc_minimum_job_distance numeric;
 DECLARE pc_extra_stop_enabled BOOLEAN;
+DECLARE pc_drop_off_mileage BOOLEAN;
 
 DECLARE
   BEGIN
-    --SET ADDRESS VARIABLES
+    --SET VARIABLES
     pu_state  := (SELECT state FROM geocodes WHERE id = pu_geo);
     do_state  := (SELECT state FROM geocodes WHERE id = do_geo);
     epu_state := (SELECT state FROM geocodes WHERE id = epu_geo);
     edo_state := (SELECT state FROM geocodes WHERE id = edo_geo);
-    pc_state  := (SELECT state FROM zip_codes WHERE zip = (SELECT zip FROM price_charts WHERE id = price_chart_id));
+    pc_state  := (SELECT state FROM zip_codes WHERE zip = (SELECT zip FROM price_charts WHERE id = pc_id));
     pu_earth  := (SELECT * FROM ll_to_earth(
         (SELECT latitude FROM geocodes WHERE id = pu_geo),
         (SELECT longitude FROM geocodes WHERE id = pu_geo)));
@@ -43,24 +44,25 @@ DECLARE
         (SELECT latitude FROM geocodes WHERE id = edo_geo),
         (SELECT longitude FROM geocodes WHERE id = edo_geo)));
     pc_earth  := (SELECT * FROM ll_to_earth(
-        (SELECT latitude FROM price_charts WHERE id = price_chart_id),
-        (SELECT longitude FROM price_charts WHERE id = price_chart_id)));
+        (SELECT latitude FROM price_charts WHERE id = pc_id),
+        (SELECT longitude FROM price_charts WHERE id = pc_id)));
     intrastate := (SELECT
       (pu_state = COALESCE(do_state,pc_state)) AND
       CASE WHEN epu_geo IS NOT NULL THEN (pu_state = epu_state) ELSE TRUE END AND
       CASE WHEN edo_geo IS NOT NULL THEN (pu_state = edo_state) ELSE TRUE END
     );
-    pc_us_dot := (SELECT us_dot <> '' OR us_dot IS NOT NULL FROM price_charts WHERE id = price_chart_id);
-    pc_usa_interstate_moves := (SELECT usa_interstate_moves = 't' FROM price_charts WHERE id = price_chart_id);
-    pc_range := (SELECT range * 1609.34 FROM price_charts WHERE id = price_chart_id);
-    pc_lat := (SELECT latitude FROM price_charts WHERE id = price_chart_id);
-    pc_long := (SELECT longitude FROM price_charts WHERE id = price_chart_id);
-    pc_state_authority_1_state := (SELECT state_authority_1_state FROM price_charts WHERE id = price_chart_id);
-    pc_state_authority_2_state := (SELECT state_authority_2_state FROM price_charts WHERE id = price_chart_id);
-    pc_state_authority_3_state := (SELECT state_authority_3_state FROM price_charts WHERE id = price_chart_id);
-    pc_state_authority_4_state := (SELECT state_authority_4_state FROM price_charts WHERE id = price_chart_id);
-    pc_minimum_job_distance := (SELECT minimum_job_distance * 1609.34 FROM price_charts WHERE id = price_chart_id);
-    pc_extra_stop_enabled := (SELECT extra_stop_enabled FROM price_charts WHERE id = price_chart_id);
+    pc_us_dot := (SELECT us_dot <> '' OR us_dot IS NOT NULL FROM price_charts WHERE id = pc_id);
+    pc_usa_interstate_moves := (SELECT usa_interstate_moves = 't' FROM price_charts WHERE id = pc_id);
+    pc_range := (SELECT range * 1609.34 FROM price_charts WHERE id = pc_id);
+    pc_lat := (SELECT latitude FROM price_charts WHERE id = pc_id);
+    pc_long := (SELECT longitude FROM price_charts WHERE id = pc_id);
+    pc_state_authority_1_state := (SELECT state_authority_1_state FROM price_charts WHERE id = pc_id);
+    pc_state_authority_2_state := (SELECT state_authority_2_state FROM price_charts WHERE id = pc_id);
+    pc_state_authority_3_state := (SELECT state_authority_3_state FROM price_charts WHERE id = pc_id);
+    pc_state_authority_4_state := (SELECT state_authority_4_state FROM price_charts WHERE id = pc_id);
+    pc_minimum_job_distance := (SELECT minimum_job_distance * 1609.34 FROM price_charts WHERE id = pc_id);
+    pc_extra_stop_enabled := (SELECT extra_stop_enabled FROM price_charts WHERE id = pc_id);
+		pc_drop_off_mileage := (SELECT drop_off_mileage * 1609.34 FROM price_charts WHERE id = pc_id);
 
 		DROP TABLE IF EXISTS address_errors;
 		CREATE TEMP TABLE address_errors (errors varchar);
@@ -86,24 +88,9 @@ DECLARE
 			INSERT INTO address_errors VALUES ('This mover does not support this extra pick up location');
     END IF;
 
-    --FIND LOCAL MOVERS
-    DROP TABLE IF EXISTS mover_local_locations;
-    CREATE TEMP TABLE mover_local_locations AS (
-      SELECT CAST(NULL AS INT) as mover_location_id,
-        movers_by_haul.latest_pc_id as price_chart_id,
-        movers_by_haul.local_cents_per_cubic_foot as cents_per_cubic_foot,
-        CAST('local' AS VARCHAR) as location_type,
-        CAST(NULL AS INT) as maximum_delivery_days,
-        CAST(NULL AS INT) as minimum_delivery_days,
-        CAST(NULL AS BOOLEAN) as dedicated,
-        CAST(NULL AS NUMERIC) as extra_fee,
-        movers_by_haul.drop_off_mileage AS range,
-        CAST(NULL AS BOOLEAN) as partially_active,
-        movers_by_haul.pu_lat as location_latitude, movers_by_haul.pu_long as location_longitude,
-        earth_distance(movers_by_haul.mover_earth,do_earth)/1609.34 AS distance_in_miles
-      FROM movers_by_haul
-      WHERE (SELECT * FROM earth_distance(movers_by_haul.mover_earth, COALESCE(do_earth,pu_earth))) <= movers_by_haul.drop_off_mileage * 1609.34
-      AND (SELECT local_moves FROM price_charts WHERE movers_by_haul.latest_pc_id = price_charts.id ));
+    IF do_geo IS NOT NULL AND (SELECT FROM earth_distance(pc_earth,do_earth)) >= pc_drop_off_mileage THEN
+			SELECT count(*) FROM mover_locations WHERE state_code in (do_state,edo_state) AND active = true AND location_type = 'state' and price_chart_id = pc_id)
+		END IF;
 
     --FIND ALL LONG DISTANCE MOVER LOCATIONS
     DROP TABLE IF EXISTS mover_state_locations;
