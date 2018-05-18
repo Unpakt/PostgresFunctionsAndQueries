@@ -1,7 +1,7 @@
 
 SELECT * FROM validate_addresses(20644,20644,14457);
 DROP FUNCTION IF EXISTS validate_addresses(integer,integer,integer,integer,integer);
-CREATE FUNCTION validate_addresses(pu_geo integer, do_geo integer, pc_id integer, epu_geo integer default NULL, edo_geo integer default NULL)
+CREATE FUNCTION validate_addresses(pc_id integer, pu_geo integer, do_geo integer default NULL, epu_geo integer default NULL, edo_geo integer default NULL)
 RETURNS TABLE(errors VARCHAR) AS $$
 
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
@@ -92,7 +92,8 @@ DECLARE
 		IF do_geo IS NULL and pc_local_moves = FALSE THEN
 			INSERT INTO address_errors VALUES ('This mover does not support storage');
 		END IF;
-		IF do_geo IS NOT NULL AND (SELECT earth_distance(pc_earth,do_earth)) > pc_drop_off_mileage THEN
+		IF (do_geo IS NOT NULL AND (SELECT earth_distance(pc_earth,do_earth)) > pc_drop_off_mileage) OR pc_local_moves = FALSE THEN
+			IF 1=1 THEN
 	      --FIND ALL LONG DISTANCE MOVER LOCATIONS
 		    DROP TABLE IF EXISTS pc_state_locations;
 		    CREATE TEMP TABLE pc_state_locations AS (
@@ -159,7 +160,12 @@ DECLARE
 		        INSERT INTO address_errors VALUES ('This mover does not support this extra drop off location');
 		       END IF;
 	      END IF;
+      END IF;
+    ELSE
+      IF edo_geo IS NOT NULL AND (SELECT earth_distance(pc_earth,do_earth)) > pc_drop_off_mileage THEN
+				INSERT INTO address_errors VALUES ('This mover does not support this extra drop off location');
 			END IF;
+		END IF;
 
 --     --FILTER BY EXTRA DROP OFF
 --     IF (SELECT mp.extra_drop_off_enabled FROM mp) = true THEN
