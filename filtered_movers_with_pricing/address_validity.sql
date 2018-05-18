@@ -1,5 +1,5 @@
 
-SELECT * FROM validate_addresses(20644,20644,14457);
+SELECT * FROM validate_addresses(14457,20644,20644,20644,20644);
 DROP FUNCTION IF EXISTS validate_addresses(integer,integer,integer,integer,integer);
 CREATE FUNCTION validate_addresses(pc_id integer, pu_geo integer, do_geo integer default NULL, epu_geo integer default NULL, edo_geo integer default NULL)
 RETURNS TABLE(errors VARCHAR) AS $$
@@ -161,34 +161,19 @@ DECLARE
 		       END IF;
 	      END IF;
       END IF;
+          --FILTER BY EXTRA DROP OFF
+	    IF edo_geo IS NOT NULL THEN
+	      DELETE FROM all_pc_locations WHERE all_pc_locations.location_type = 'state' AND earth_distance(do_earth,edo_earth)/1609.34 > GREATEST(50.0,all_pc_locations.range);
+	      DELETE FROM all_pc_locations WHERE all_pc_locations.location_type = 'city'  AND earth_distance(ll_to_earth(all_pc_locations.location_latitude,all_pc_locations.location_longitude),edo_earth)/1609.34 > all_pc_locations.range;
+        IF (SELECT COUNT(*) FROM all_pc_locations) = 0 THEN
+          INSERT INTO address_errors VALUES ('This mover does not support this extra drop off location');
+        END IF;
+	    END IF;
     ELSE
       IF edo_geo IS NOT NULL AND (SELECT earth_distance(pc_earth,do_earth)) > pc_drop_off_mileage THEN
 				INSERT INTO address_errors VALUES ('This mover does not support this extra drop off location');
 			END IF;
 		END IF;
-
---     --FILTER BY EXTRA DROP OFF
---     IF (SELECT mp.extra_drop_off_enabled FROM mp) = true THEN
---       DELETE FROM movers_with_location WHERE movers_with_location.extra_stop_enabled = false;
---       DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'local' AND earth_distance(movers_with_location.mover_earth,edo_earth)/1609.34 > movers_with_location.drop_off_mileage;
---       DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'state' AND earth_distance(do_earth,edo_earth)/1609.34 > GREATEST(50.0,movers_with_location.drop_off_mileage);
---       DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'city'  AND earth_distance(ll_to_earth(movers_with_location.location_latitude,movers_with_location.location_longitude),edo_earth)/1609.34 > movers_with_location.range;
---     END IF;
---
---         --RAISE NO MOVER FOUND ERROR
---         IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
---           RAISE EXCEPTION 'No movers can support this extra drop off location';
---         END IF;
---
---     --FILTER BY EXTRA PICK UP
---     IF (SELECT mp.extra_pick_up_enabled FROM mp) = true THEN
---       DELETE FROM movers_with_location WHERE movers_with_location.extra_stop_enabled = false;
---     END IF;
---
---         --RAISE NO MOVER FOUND ERROR
---         IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
---           RAISE EXCEPTION 'No movers can support this extra pick up location';
---         END IF;
 
 RETURN QUERY SELECT * FROM address_errors;
 END; $$
