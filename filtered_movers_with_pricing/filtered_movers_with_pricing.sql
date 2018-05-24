@@ -31,6 +31,7 @@ END;
 END
 $func$ LANGUAGE plpgsql;
 
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN);
@@ -86,7 +87,8 @@ DECLARE
     --SET GENERAL VARIABLES
     mp_id := (SELECT uuidable_id FROM uuids WHERE uuids.uuid = $1 AND uuidable_type = 'MovePlan');
     DROP TABLE IF EXISTS mp;
-    white_label_movers := (SELECT array_agg(mover_id) FROM white_label_whitelists WHERE white_label_id = (SELECT white_label_id FROM mp));
+    CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
+    white_label_movers := (SELECT array_agg(white_label_whitelists.mover_id) FROM white_label_whitelists WHERE white_label_id = (SELECT white_label_id FROM mp));
     frozen_pc_id := COALESCE((SELECT jobs.price_chart_id FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1),(SELECT frozen_price_chart_id FROM mp));
     frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
     frozen_mover_latest_pc_id := (SELECT price_charts.id FROM price_charts WHERE price_charts.mover_id = frozen_mover_id ORDER BY created_at DESC LIMIT 1);
@@ -231,7 +233,7 @@ DECLARE
 	            ELSE 1=1 END)
 	        AND branchable_type = 'Mover'
 	        AND marketplace_status = 'live'
-	        AND (movers.is_hidden = false OR movers.id = any(whitelist))
+	        AND (movers.is_hidden = false OR movers.id = any(white_label_movers))
 	      JOIN (SELECT
 	              id as latest_pc_id,
 	              price_charts.mover_id AS pc_mover_id,
