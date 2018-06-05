@@ -1,5 +1,5 @@
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
-SELECT * FROM filtered_movers_with_pricing('384d4a3a-5246-11e8-aaa9-41df8e0f4b38');
+SELECT * FROM filtered_movers_with_pricing('e4d0fdd6-0ac2-11e8-b0a6-41df8e0f4b38');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{679}');
@@ -97,15 +97,6 @@ DECLARE
     sit_date := (SELECT storage_move_out_date FROM mp);
     box_date := (SELECT box_delivery_date FROM mp);
     box_dow := (SELECT EXTRACT(isodow FROM box_date :: DATE));
-    num_stairs := (
-      SELECT sum(flights_of_stairs) FROM (
-        SELECT
-          heights.flights_of_stairs
-        FROM addresses
-        JOIN heights
-          ON addresses.height_id = heights.id
-          AND addresses.move_plan_id = mp_id
-          AND addresses.role_in_plan IN ('drop_off', 'pick_up') ) as stairs);
     mp_coupon_id := (
       SELECT COALESCE(
           (SELECT coupon_id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state <> 'cancelled' AND mover_state <> 'declined' ORDER BY jobs.id LIMIT 1),
@@ -190,6 +181,15 @@ DECLARE
 	    END IF;
 
 	    --SET ADDRESS VARIABLES
+    num_stairs := (
+      SELECT sum(flights_of_stairs) FROM (
+        SELECT
+          heights.flights_of_stairs
+        FROM mp_addresses
+        JOIN heights
+          ON mp_addresses.height_id = heights.id
+          AND mp_addresses.move_plan_id = mp_id
+          AND mp_addresses.role_in_plan IN ('drop_off', 'pick_up') ) as stairs);
 	    pu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'pick_up');
 	    epu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
 	    do_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'drop_off');
