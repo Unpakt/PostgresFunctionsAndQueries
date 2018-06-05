@@ -1,5 +1,5 @@
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
-SELECT * FROM filtered_movers_with_pricing('e4d0fdd6-0ac2-11e8-b0a6-41df8e0f4b38');
+SELECT * FROM filtered_movers_with_pricing('fff76706-fd86-11e7-ac9d-41df8e0f4b38');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{679}');
@@ -38,8 +38,8 @@ DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN
 CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false, for_bid BOOLEAN DEFAULT false)
 RETURNS TABLE(
   total numeric,
-  facebook_discount numeric, mover_special_discount numeric,
-  twitter_discount numeric, coupon_discount numeric,
+  coupon_discount numeric, mover_special_discount numeric,
+  twitter_discount numeric, facebook_discount numeric,
   subtotal numeric,
   moving_cost_adjusted numeric, travel_cost_adjusted numeric,
   special_handling_cost_adjusted numeric, storage_cost numeric,
@@ -1114,19 +1114,19 @@ CREATE TEMP TABLE movers_and_pricing AS (
       END
       ),2),0.00) AS mover_special_discount,
 
-      --FACEBOOK DISCOUNT
-      CASE WHEN (SELECT mp.shared_on_facebook = true FROM mp) THEN
-          -5.00
-      ELSE
-          0
-      END AS facebook_discount,
-
       --TWITTER DISCOUNT
       CASE WHEN (SELECT mp.shared_on_twitter = true FROM mp) THEN
           -5.00
       ELSE
           0
       END AS twitter_discount,
+
+      --FACEBOOK DISCOUNT
+      CASE WHEN (SELECT mp.shared_on_facebook = true FROM mp) THEN
+          -5.00
+      ELSE
+          0
+      END AS facebook_discount,
       subtotal.*
     FROM(
       SELECT
