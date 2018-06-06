@@ -1,11 +1,11 @@
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
-SELECT * FROM filtered_movers_with_pricing('fff76706-fd86-11e7-ac9d-41df8e0f4b38');
+SELECT * FROM filtered_movers_with_pricing('47c13d54-616a-11e8-26bc-41df8e0f4b38');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{679}');
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
-SELECT * FROM comparison_presenter_v4('1bd93cba-552a-11e8-8aac-016ea2b9fd71',null,true);
+SELECT * FROM comparison_presenter_v4('fff76706-fd86-11e7-ac9d-41df8e0f4b38',null,true);
 
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
@@ -80,6 +80,7 @@ DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
 DECLARE epu_state varchar;DECLARE epu_earth earth;DECLARE epu_key varchar;
 DECLARE do_state varchar; DECLARE do_earth earth; DECLARE do_key varchar;
 DECLARE edo_state varchar;DECLARE edo_earth earth;DECLARE edo_key varchar;
+
 
 DECLARE
   BEGIN
@@ -1059,78 +1060,24 @@ DECLARE
     AND active = true
     );
 
---DO ALL THE PRICING STUFF (oh boi)
-DROP TABLE IF EXISTS movers_and_pricing;
-CREATE TEMP TABLE movers_and_pricing AS (
-  SELECT
-
-  --TOTAL
-    total.subtotal +
-    total.mover_special_discount +
-    total.facebook_discount +
-    total.twitter_discount +
-    CASE
-      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
-          (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
-          -1.00 / 100.00 *
-          (total.subtotal + total.mover_special_discount)
-      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
-          (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
-          -1.00 / 100.00
-      ELSE
-          0
-      END AS total,
-      --COUPON DISCOUNT
-      CASE
-      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
-          (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
-          -1.00 / 100.00 *
-          (total.subtotal + total.mover_special_discount)
-      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
-          (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
-          -1.00 / 100.00
-      ELSE
-          0
-      END AS coupon_discount,
-    total.*
-  FROM (
+    --HANDLE ADMIN ADJUSTMENTS
+    DROP TABLE IF EXISTS mp_admin_adjustments;
+    CREATE TEMP TABLE mp_admin_adjustments AS (
     SELECT
+	    id,
+	    amount_in_cents,
+	    percentage,
+	    is_applied_before_discounts,
+	    applies_to
+    FROM admin_adjustments where planable_type = 'MovePlan' AND planable_id = mp_id
+    );
 
-      --MOVER SPECIAL DISCOUNT
-      COALESCE(ROUND((CASE WHEN subtotal.location_type = 'local' THEN
-        (CASE WHEN (SELECT percentage FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND short_haul = true LIMIT 1) = true THEN
-            (SELECT discount_percentage * -1.00/100.00 FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND short_haul = true LIMIT 1)
-            * subtotal.subtotal
-          ELSE
-            (SELECT discount_cents * -1.00/100.00 FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND short_haul = true LIMIT 1)
-          END)
-      ELSE
-        (CASE WHEN (SELECT percentage FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND long_haul = true LIMIT 1) = true THEN
-          (SELECT discount_percentage * -1.00/100.00 FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND long_haul = true LIMIT 1)
-          * subtotal.subtotal
-        ELSE
-          (SELECT discount_cents * -1.00/100.00 FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND long_haul = true LIMIT 1)
-        END)
-      END
-      ),2),0.00) AS mover_special_discount,
 
-      --TWITTER DISCOUNT
-      CASE WHEN (SELECT mp.shared_on_twitter = true FROM mp) THEN
-          -5.00
-      ELSE
-          0
-      END AS twitter_discount,
 
-      --FACEBOOK DISCOUNT
-      CASE WHEN (SELECT mp.shared_on_facebook = true FROM mp) THEN
-          -5.00
-      ELSE
-          0
-      END AS facebook_discount,
-      subtotal.*
-    FROM(
+--DO ALL THE PRICING STUFF (oh boi)
+DROP TABLE IF EXISTS movers_and_pricing_subtotal;
+CREATE TEMP TABLE movers_and_pricing_subtotal AS (
       SELECT
-
         --SUBTOTAL
         pricing_data.moving_cost_adjusted +
         pricing_data.travel_cost_adjusted +
@@ -1429,8 +1376,79 @@ CREATE TEMP TABLE movers_and_pricing AS (
             AS pre_sum GROUP BY pre_sum.price_chart_id) AS local_distance_tiers
           ON local_price_chart_id = mwlabr.latest_pc_id
     ) AS pricing_data
-  ) AS subtotal
+  );
+
+DROP TABLE IF EXISTS movers_and_pricing;
+CREATE TEMP TABLE movers_and_pricing AS (
+  SELECT
+
+  --TOTAL
+    total.subtotal +
+    total.mover_special_discount +
+    total.facebook_discount +
+    total.twitter_discount +
+    CASE
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
+          (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00 *
+          (total.subtotal + total.mover_special_discount)
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
+          (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00
+      ELSE
+          0
+      END AS total,
+      --COUPON DISCOUNT
+      CASE
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
+          (SELECT discount_percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00 *
+          (total.subtotal + total.mover_special_discount)
+      WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), true) = false THEN
+          (SELECT discount_cents FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ) *
+          -1.00 / 100.00
+      ELSE
+          0
+      END AS coupon_discount,
+    total.*
+  FROM (
+    SELECT
+
+      --MOVER SPECIAL DISCOUNT
+      COALESCE(ROUND((CASE WHEN subtotal.location_type = 'local' THEN
+        (CASE WHEN (SELECT percentage FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND short_haul = true LIMIT 1) = true THEN
+            (SELECT discount_percentage * -1.00/100.00 FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND short_haul = true LIMIT 1)
+            * subtotal.subtotal
+          ELSE
+            (SELECT discount_cents * -1.00/100.00 FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND short_haul = true LIMIT 1)
+          END)
+      ELSE
+        (CASE WHEN (SELECT percentage FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND long_haul = true LIMIT 1) = true THEN
+          (SELECT discount_percentage * -1.00/100.00 FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND long_haul = true LIMIT 1)
+          * subtotal.subtotal
+        ELSE
+          (SELECT discount_cents * -1.00/100.00 FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND long_haul = true LIMIT 1)
+        END)
+      END
+      ),2),0.00) AS mover_special_discount,
+
+      --TWITTER DISCOUNT
+      CASE WHEN (SELECT mp.shared_on_twitter = true FROM mp) THEN
+          -5.00
+      ELSE
+          0
+      END AS twitter_discount,
+
+      --FACEBOOK DISCOUNT
+      CASE WHEN (SELECT mp.shared_on_facebook = true FROM mp) THEN
+          -5.00
+      ELSE
+          0
+      END AS facebook_discount,
+      subtotal.*
+    FROM movers_and_pricing_subtotal AS subtotal
 ) AS total);
+
 RETURN QUERY SELECT * FROM movers_and_pricing ORDER BY (
   (movers_and_pricing.local_consult_only OR movers_and_pricing.interstate_consult_only),movers_and_pricing.total
 ) ASC;
