@@ -1,5 +1,5 @@
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
-SELECT * FROM filtered_movers_with_pricing('4ebcec5e-4840-11e8-889e-41df8e0f4b38','{351}',false,true);
+SELECT * FROM filtered_movers_with_pricing('5a3c6a32-024f-11e8-11a1-41df8e0f4b38','{618}',false,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{679}');
@@ -1552,8 +1552,8 @@ IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 	END IF;
 END IF;
 
-UPDATE movers_and_pricing SET mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - commission)/100) + mp.mover_special_discount + mover_cut_adj),0.00) FROM movers_and_pricing AS mp ;
-UPDATE movers_and_pricing SET unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission)/100) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + unpakt_fee_adj),0.00) FROM movers_and_pricing AS mp;
+UPDATE movers_and_pricing SET mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + mover_cut_adj),0.00) FROM movers_and_pricing AS mp ;
+UPDATE movers_and_pricing SET unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + unpakt_fee_adj),0.00) FROM movers_and_pricing AS mp;
 
 
 
