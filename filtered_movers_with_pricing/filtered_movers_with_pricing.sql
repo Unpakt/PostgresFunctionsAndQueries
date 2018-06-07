@@ -1,5 +1,5 @@
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
-SELECT * FROM filtered_movers_with_pricing('47c13d54-616a-11e8-26bc-41df8e0f4b38');
+SELECT * FROM filtered_movers_with_pricing('4ebcec5e-4840-11e8-889e-41df8e0f4b38','{351}',false,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{679}');
@@ -37,10 +37,11 @@ DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN);
 CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false, for_bid BOOLEAN DEFAULT false)
 RETURNS TABLE(
-  total numeric,
+  total numeric, total_adjustments numeric,
+  mover_cut numeric, unpakt_fee numeric,
   coupon_discount numeric, mover_special_discount numeric,
   twitter_discount numeric, facebook_discount numeric,
-  subtotal numeric,
+  subtotal numeric, adj_before numeric,
   moving_cost_adjusted numeric, travel_cost_adjusted numeric,
   special_handling_cost_adjusted numeric, storage_cost numeric,
   packing_cost_adjusted numeric, cardboard_cost_adjusted numeric,
@@ -74,12 +75,25 @@ DECLARE num_carpentry integer;DECLARE num_crating integer;
 DECLARE box_dow integer;DECLARE box_date date;DECLARE box_cubic_feet numeric;
 DECLARE frozen_pc_id integer; DECLARE frozen_mover_id integer;
 DECLARE frozen_mover_latest_pc_id integer; DECLARE white_label_movers int[];
+DECLARE commission numeric;
 
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
 DECLARE epu_state varchar;DECLARE epu_earth earth;DECLARE epu_key varchar;
 DECLARE do_state varchar; DECLARE do_earth earth; DECLARE do_key varchar;
 DECLARE edo_state varchar;DECLARE edo_earth earth;DECLARE edo_key varchar;
+
+--DEFINE VARIABLES FOR LOOP
+DECLARE adj RECORD;
+DECLARE new_sub NUMERIC;
+DECLARE old_total NUMERIC;
+DECLARE new_total NUMERIC;
+DECLARE before_adj NUMERIC;
+DECLARE after_adj NUMERIC;
+DECLARE mover_cut_sub NUMERIC;
+DECLARE mover_cut_adj NUMERIC;
+DECLARE unpakt_fee_sub NUMERIC;
+DECLARE unpakt_fee_adj NUMERIC;
 
 
 DECLARE
@@ -89,6 +103,7 @@ DECLARE
     mp_id := (SELECT uuidable_id FROM uuids WHERE uuids.uuid = $1 AND uuidable_type = 'MovePlan');
     DROP TABLE IF EXISTS mp;
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
+    commission := (SELECT bid_commission_rate FROM mp);
     white_label_movers := (SELECT array_agg(white_label_whitelists.mover_id) FROM white_label_whitelists WHERE white_label_id = (SELECT white_label_id FROM mp));
     frozen_pc_id := COALESCE((SELECT jobs.price_chart_id FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1),(SELECT frozen_price_chart_id FROM mp));
     frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
@@ -102,7 +117,12 @@ DECLARE
       SELECT COALESCE(
           (SELECT coupon_id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state <> 'cancelled' AND mover_state <> 'declined' ORDER BY jobs.id LIMIT 1),
           (SELECT coupon_id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state = 'cancelled' ORDER BY jobs.id DESC LIMIT 1)));
-
+		before_adj := 0.00;
+		after_adj := 0.00;
+		unpakt_fee_sub := 0.00;
+		mover_cut_sub := 0.00;
+		unpakt_fee_adj := 0.00;
+		mover_cut_adj := 0.00;
 	    --FIND MOVE PLAN INVENTORY ITEMS
 	    DROP TABLE IF EXISTS mp_ii;
 	    CREATE TEMP TABLE mp_ii AS (
@@ -1060,20 +1080,6 @@ DECLARE
     AND active = true
     );
 
-    --HANDLE ADMIN ADJUSTMENTS
-    DROP TABLE IF EXISTS mp_admin_adjustments;
-    CREATE TEMP TABLE mp_admin_adjustments AS (
-    SELECT
-	    id,
-	    amount_in_cents,
-	    percentage,
-	    is_applied_before_discounts,
-	    applies_to
-    FROM admin_adjustments where planable_type = 'MovePlan' AND planable_id = mp_id
-    );
-
-
-
 --DO ALL THE PRICING STUFF (oh boi)
 DROP TABLE IF EXISTS movers_and_pricing_subtotal;
 CREATE TEMP TABLE movers_and_pricing_subtotal AS (
@@ -1088,6 +1094,7 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
         pricing_data.surcharge_cubic_feet_cost_adjusted +
         pricing_data.coi_charges_cost +
         pricing_data.size_surcharge_cost_adjusted AS subtotal,
+        0.00 AS adj_before,
       pricing_data.*
       FROM (
 
@@ -1378,6 +1385,43 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
     ) AS pricing_data
   );
 
+
+
+--HANDLE BEFORE DISCOUNT ADMIN ADJUSTMENTS
+DROP TABLE IF EXISTS mp_admin_adjustments;
+CREATE TEMP TABLE mp_admin_adjustments AS (
+SELECT
+  id,
+  amount_in_cents,
+  percentage,
+  is_applied_before_discounts,
+  applies_to,
+  created_at
+FROM admin_adjustments where planable_type = 'MovePlan' AND planable_id = mp_id
+);
+
+IF
+	(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = true) > 0
+	AND for_bid = true
+	AND (SELECT count(*) FROM movers_and_pricing_subtotal) = 1
+THEN
+	new_sub := (SELECT movers_and_pricing_subtotal.subtotal FROM movers_and_pricing_subtotal LIMIT 1);
+	FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = TRUE ORDER BY created_at ASC
+	LOOP
+		IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
+			UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * new_sub) WHERE id = adj.id;
+			before_adj := before_adj + (adj.percentage * new_sub)/100.00;
+			new_sub := new_sub + (adj.percentage * new_sub)/100.00;
+		ELSE
+			before_adj := before_adj + adj.amount_in_cents/100.00;
+			new_sub := new_sub + adj.amount_in_cents/100.00;
+		END IF;
+		RAISE NOTICE '%', before_adj;
+	END LOOP;
+	UPDATE movers_and_pricing_subtotal SET subtotal = new_sub;
+	UPDATE movers_and_pricing_subtotal SET adj_before = before_adj;
+END IF;
+
 DROP TABLE IF EXISTS movers_and_pricing;
 CREATE TEMP TABLE movers_and_pricing AS (
   SELECT
@@ -1398,6 +1442,9 @@ CREATE TEMP TABLE movers_and_pricing AS (
       ELSE
           0
       END AS total,
+      total.adj_before AS total_adjustments,
+      0.00 AS  mover_cut,
+      0.00 AS unpakt_fee,
       --COUPON DISCOUNT
       CASE
       WHEN COALESCE((SELECT percentage FROM coupons WHERE mp_coupon_id = coupons.id AND active = TRUE ), false) = true THEN
@@ -1448,6 +1495,68 @@ CREATE TEMP TABLE movers_and_pricing AS (
       subtotal.*
     FROM movers_and_pricing_subtotal AS subtotal
 ) AS total);
+
+IF
+	(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both') > 0
+	AND for_bid = true
+	AND (SELECT count(*) FROM movers_and_pricing) = 1
+THEN
+	new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
+	old_total := new_total;
+	FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both' ORDER BY created_at ASC
+	LOOP
+		IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
+			UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * new_total) WHERE id = adj.id;
+			after_adj := after_adj + (adj.percentage * new_total)/100.00;
+			new_total := new_total + (adj.percentage * new_total)/100.00;
+		ELSE
+			after_adj := after_adj + adj.amount_in_cents/100.00;
+			new_total := new_total + adj.amount_in_cents/100.00;
+		END IF;
+		RAISE NOTICE 'after_adj = %', after_adj;
+	END LOOP;
+	UPDATE movers_and_pricing SET total = new_total;
+	UPDATE movers_and_pricing SET total_adjustments = before_adj + after_adj;
+END IF;
+
+unpakt_fee_adj := 0.00;
+mover_cut_adj := 0.00;
+IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
+	unpakt_fee_sub := old_total;
+	mover_cut_sub := old_total;
+	IF (SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both') > 0 THEN
+		FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both' ORDER BY created_at ASC
+		LOOP
+			IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
+				IF adj.applies_to = 'mover_fee' THEN
+					UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * mover_cut_sub) WHERE id = adj.id;
+					mover_cut_adj := mover_cut_adj + (adj.percentage * mover_cut_sub)/100.00;
+					mover_cut_sub := mover_cut_sub + (adj.percentage * mover_cut_sub)/100.00;
+				ELSEIF adj.applies_to = 'unpakt_fee' THEN
+					UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * unpakt_fee_sub) WHERE id = adj.id;
+					unpakt_fee_adj := unpakt_fee_adj + (adj.percentage * unpakt_fee_sub)/100.00;
+					unpakt_fee_sub := unpakt_fee_sub + (adj.percentage * unpakt_fee_sub)/100.00;
+				END IF;
+			ELSE
+				IF adj.applies_to = 'mover_fee' THEN
+					mover_cut_adj := mover_cut_adj + adj.amount_in_cents/100.00;
+					mover_cut_sub := mover_cut_sub + adj.amount_in_cents/100.00;
+				ELSEIF adj.applies_to = 'unpakt_fee' THEN
+					unpakt_fee_adj := unpakt_fee_adj + adj.amount_in_cents/100.00;
+					unpakt_fee_sub := unpakt_fee_sub + adj.amount_in_cents/100.00;
+				END IF;
+			END IF;
+			RAISE NOTICE 'mover_adj = %', after_adj;
+			RAISE NOTICE 'unpakt_adj = %', after_adj;
+		END LOOP;
+	END IF;
+END IF;
+
+UPDATE movers_and_pricing SET mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - commission)/100) + mp.mover_special_discount + mover_cut_adj),0.00) FROM movers_and_pricing AS mp ;
+UPDATE movers_and_pricing SET unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission)/100) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + unpakt_fee_adj),0.00) FROM movers_and_pricing AS mp;
+
+
+
 
 RETURN QUERY SELECT * FROM movers_and_pricing ORDER BY (
   (movers_and_pricing.local_consult_only OR movers_and_pricing.interstate_consult_only),movers_and_pricing.total
