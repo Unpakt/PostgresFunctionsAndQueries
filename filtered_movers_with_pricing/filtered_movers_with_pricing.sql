@@ -1,8 +1,8 @@
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
-SELECT * FROM filtered_movers_with_pricing('5a3c6a32-024f-11e8-11a1-41df8e0f4b38','{618}',false,true);
+SELECT * FROM filtered_movers_with_pricing('c267dde6-f046-11e7-3da4-0f461a27ccab','{679}',false,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
-SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{679}');
+SELECT * FROM filtered_movers_with_pricing('c267dde6-f046-11e7-3da4-0f461a27ccab');
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('fff76706-fd86-11e7-ac9d-41df8e0f4b38',null,true);
@@ -1397,7 +1397,7 @@ SELECT
   is_applied_before_discounts,
   applies_to,
   created_at
-FROM admin_adjustments where planable_type = 'MovePlan' AND planable_id = mp_id
+FROM admin_adjustments WHERE planable_id = mp_id AND planable_type = 'MovePlan'
 );
 
 IF
@@ -1519,8 +1519,6 @@ THEN
 	UPDATE movers_and_pricing SET total_adjustments = before_adj + after_adj;
 END IF;
 
-unpakt_fee_adj := 0.00;
-mover_cut_adj := 0.00;
 IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 	unpakt_fee_sub := old_total;
 	mover_cut_sub := old_total;
@@ -1550,10 +1548,10 @@ IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 			RAISE NOTICE 'unpakt_adj = %', after_adj;
 		END LOOP;
 	END IF;
+	UPDATE movers_and_pricing SET mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + mover_cut_adj),0.00) FROM movers_and_pricing AS mp ;
+	UPDATE movers_and_pricing SET unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + unpakt_fee_adj),0.00) FROM movers_and_pricing AS mp;
 END IF;
 
-UPDATE movers_and_pricing SET mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + mover_cut_adj),0.00) FROM movers_and_pricing AS mp ;
-UPDATE movers_and_pricing SET unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + unpakt_fee_adj),0.00) FROM movers_and_pricing AS mp;
 
 
 
