@@ -1,5 +1,4 @@
 DROP FUNCTION IF EXISTS potential_movers(VARCHAR, INTEGER[]);
-
 CREATE FUNCTION potential_movers(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL)
 RETURNS int[] AS $$
 
