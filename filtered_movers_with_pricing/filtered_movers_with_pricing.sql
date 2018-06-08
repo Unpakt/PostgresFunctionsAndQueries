@@ -1,5 +1,5 @@
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
-SELECT * FROM filtered_movers_with_pricing('c267dde6-f046-11e7-3da4-0f461a27ccab','{679}',false,true);
+SELECT * FROM filtered_movers_with_pricing('9d432f3a-3a05-11e8-c09b-0f461a27ccab',null,false,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('c267dde6-f046-11e7-3da4-0f461a27ccab');
@@ -716,13 +716,13 @@ DECLARE
 	          END AS net_am,
 	          CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
 		          CASE WHEN COALESCE(frz_daily_sit.capacity_secondary, frz_weekly_sit.capacity_secondary) IS NULL
-	            THEN COALESCE(frz_daily.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-		          ELSE COALESCE(frz_daily.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(am, 0)
+	            THEN COALESCE(frz_daily_sit.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(sit_am, 0) - COALESCE(sit_pm, 0)
+		          ELSE COALESCE(frz_daily_sit.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(sit_am, 0)
 	            END
 	          ELSE
 		          CASE WHEN COALESCE(daily_sit.capacity_secondary, weekly_sit.capacity_secondary) IS NULL
-	            THEN COALESCE(daily.capacity_primary, weekly_sit.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-		          ELSE COALESCE(daily.capacity_primary, weekly_sit.capacity_primary) - COALESCE(am, 0)
+	            THEN COALESCE(daily_sit.capacity_primary, weekly_sit.capacity_primary) - COALESCE(sit_am, 0) - COALESCE(sit_pm, 0)
+		          ELSE COALESCE(daily_sit.capacity_primary, weekly_sit.capacity_primary) - COALESCE(sit_am, 0)
 	            END
 	          END AS sit_avail
 	        FROM movers_with_location as mwl
@@ -838,12 +838,33 @@ DECLARE
 	            GROUP BY move_date, pc.mover_id) AS jobs
 	        ON mwl.mover_id = jobs.mover_id
 	        AND mov_date = jobs.move_date
+
+	        --MOVES BY MOVER ON MOVE DATE
+	        LEFT JOIN(
+	          SELECT
+	            pc.mover_id,
+	            move_date,
+	            COUNT(CASE WHEN move_time NOT LIKE '%PM%' THEN move_time ELSE NULL END) AS sit_am,
+	            COUNT(CASE WHEN move_time LIKE '%PM%' THEN move_time ELSE NULL END) AS sit_pm
+	          FROM jobs AS jb
+	          JOIN move_plans AS mp
+	            ON mp.id = jb.move_plan_id
+	            AND mover_state IN ('new', 'accepted', 'pending')
+	            AND user_state <> 'cancelled'
+	          JOIN price_charts AS pc
+	            ON pc.id = jb.price_chart_id
+	            GROUP BY move_date, pc.mover_id) AS sit_jobs
+	        ON mwl.mover_id = jobs.mover_id
+	        AND sit_date = jobs.move_date
 	        ) AS availability
 	        WHERE
 	        CASE
-	        WHEN for_bid = TRUE THEN 1=1
-	        WHEN mov_time = 'am' THEN availability.net_am > 0
-	        ELSE availability.net_pm > 0
+	          WHEN for_bid = TRUE THEN
+	            1=1
+	          WHEN mov_time = 'am' THEN
+	            availability.net_am > 0
+	          ELSE
+	            availability.net_pm > 0
 	        END
 	    );
 
@@ -1618,7 +1639,7 @@ FROM
 		*,
 		rank() OVER(PARTITION BY all_lines.vendor_id ORDER BY all_lines.total_cost ASC)
 	FROM
-		(SELECT
+		(SELECT DISTINCT
         bp.id AS branch_property_id,
         CAST(ba.city || ', ' || ba.state AS VARCHAR) AS city_state_label,
         (CASE WHEN pricing.location_type = 'local' THEN
