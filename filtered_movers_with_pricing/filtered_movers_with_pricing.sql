@@ -900,7 +900,7 @@ DECLARE
         mwlabr.latest_pc_id,
 
         --WAREHOUSE TO PICK UP DISTANCE
-      ((SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key)) +
+      (COALESCE((SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key)),0.00) +
 
           --HANDLE LOCAL
         (CASE WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NULL THEN
@@ -909,28 +909,28 @@ DECLARE
           (CASE WHEN epu_state IS NOT NULL THEN
 
               --PICK UP TO EXTRA PICK UP DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,epu_key)) +
+            COALESCE((SELECT * FROM distance_in_miles(pu_key,epu_key)),0.00) +
 
               --EXTRA PICK UP TO DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,do_key))
+            COALESCE((SELECT * FROM distance_in_miles(epu_key,do_key)),0.00)
           ELSE
 
               --PICK UP TO DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,do_key))
+            COALESCE((SELECT * FROM distance_in_miles(pu_key,do_key)),0.00)
           END) +
 
             --HANDLE EXTRA DROP OFF
           (CASE WHEN edo_state IS NOT NULL THEN
 
               --DROP OFF TO EXTRA DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,edo_key)) +
+            COALESCE((SELECT * FROM distance_in_miles(do_key,edo_key)),0.00) +
 
               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))
+            COALESCE((SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key)),0.00)
           ELSE
 
               --DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key))
+            COALESCE((SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)),0.00)
           END)
 
           --HANDLE LOCAL SIT
@@ -940,31 +940,31 @@ DECLARE
           (CASE WHEN epu_state IS NOT NULL THEN
 
               --PICK UP TO EXTRA PICK UP DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,epu_key))+
+            COALESCE((SELECT * FROM distance_in_miles(pu_key,epu_key)),0.00)+
 
               --EXTRA PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))
+            COALESCE((SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key)),0.00)
           ELSE
 
               --PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))
+            COALESCE((SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key)),0.00)
           END) +
 
             --HANDLE EXTRA DROP OFF
           (CASE WHEN edo_state IS NOT NULL THEN
 
               --WAREHOUSE TO DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(price_charts.distance_cache_key,do_key)) +
+            COALESCE((SELECT * FROM distance_in_miles(price_charts.distance_cache_key,do_key)),0.00) +
 
               --DROP OFF TO EXTRA DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,edo_key)) +
+            COALESCE((SELECT * FROM distance_in_miles(do_key,edo_key)),0.00) +
 
               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))
+            COALESCE((SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key)),0.00)
           ELSE
 
               --DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)) * 2
+            COALESCE((SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)),0.00) * 2
           END)
 
           --SUBTRACT EXTRA FREE MILES FOR LOCAL SIT
@@ -975,14 +975,14 @@ DECLARE
         (CASE WHEN epu_state IS NOT NULL THEN
 
             --PICK UP TO EXTRA PICK UP DISTANCE
-          (SELECT * FROM distance_in_miles(pu_key,epu_key))+
+          COALESCE((SELECT * FROM distance_in_miles(pu_key,epu_key)),0.00)+
 
             --EXTRA PICK UP TO WAREHOUSE DISTANCE
-          (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))
+          COALESCE((SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key)),0.00)
         ELSE
 
             --PICK UP TO WAREHOUSE DISTANCE
-          (SELECT * FROM distance_in_miles(price_charts.distance_cache_key,pu_key))
+          COALESCE((SELECT * FROM distance_in_miles(price_charts.distance_cache_key,pu_key)),0.00)
         END)
       END)
 
