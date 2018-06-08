@@ -853,7 +853,7 @@ DECLARE
 	        END IF;
 
 	      --FILTER BY SIT AVAILABILITY
-	    IF sit_date IS NOT NULL THEN
+	    IF sit_date IS NOT NULL AND for_bid = false THEN
 	      DELETE FROM movers_with_location_and_balancing_rate WHERE movers_with_location_and_balancing_rate.sit_avail <= 0;
 	    END IF;
 
