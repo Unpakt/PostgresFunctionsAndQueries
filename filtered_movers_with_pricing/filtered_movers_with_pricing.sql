@@ -839,7 +839,7 @@ DECLARE
 	        ON mwl.mover_id = jobs.mover_id
 	        AND mov_date = jobs.move_date
 
-	        --MOVES BY MOVER ON MOVE DATE
+	        --MOVES BY MOVER ON SIT DATE
 	        LEFT JOIN(
 	          SELECT
 	            pc.mover_id,
