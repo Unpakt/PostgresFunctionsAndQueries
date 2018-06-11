@@ -237,7 +237,7 @@ DECLARE
 	    --FIND LIVE MOVERS
 	    DROP TABLE IF EXISTS potential_movers;
 	    CREATE TEMP TABLE potential_movers AS SELECT
-	        branch_properties.name as mover_name,
+	        COALESCE(branch_properties.trade_name, branch_properties.name) as mover_name,
 	        movers.id,
 	        CASE WHEN frozen_mover_id = movers.id THEN
 	          frozen_pc_id
@@ -1655,7 +1655,7 @@ FROM
         movers.is_featured,
         bp.logo_image AS logo_url,
         -1.00 * pricing.mover_special_discount AS mover_special,
-        bp.name,
+        COALESCE(bp.trade_name,bp.name) AS name,
         bp.vendor_id,
         movers.number_of_employees,
         movers.number_of_trucks,
