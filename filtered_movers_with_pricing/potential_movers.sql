@@ -379,12 +379,7 @@ DECLARE
         movers_by_haul.pu_lat as location_latitude, movers_by_haul.pu_long as location_longitude,
         earth_distance(movers_by_haul.mover_earth,do_earth)/1609.34 AS distance_in_miles
       FROM movers_by_haul
-      WHERE
-      CASE WHEN do_earth IS NOT NULL then
-        (SELECT * FROM earth_distance(movers_by_haul.mover_earth, COALESCE(do_earth))) <= movers_by_haul.drop_off_mileage * 1609.34
-      ELSE
-        (SELECT * FROM earth_distance(movers_by_haul.mover_earth, COALESCE(pu_earth))) <= movers_by_haul.pick_up_mileage * 1609.34
-      END
+      WHERE (SELECT * FROM earth_distance(movers_by_haul.mover_earth, COALESCE(do_earth,pu_earth))) <= movers_by_haul.drop_off_mileage * 1609.34
       AND (SELECT local_moves FROM price_charts WHERE movers_by_haul.latest_pc_id = price_charts.id ));
 
     --FIND ALL LONG DISTANCE MOVER LOCATIONS
