@@ -3,6 +3,7 @@ SELECT * FROM filtered_movers_with_pricing('4956be4c-3ff9-11e8-9ea1-0f461a27ccab
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('4451bb62-6e62-11e8-98af-95c136308632');
+SELECT * FROM filtered_movers_with_pricing('b939368e-0527-11e8-3db1-0f461a27ccab','{752}',false,true);
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('fff76706-fd86-11e7-ac9d-41df8e0f4b38',null,true);
@@ -43,6 +44,7 @@ RETURNS TABLE(
   twitter_discount numeric, facebook_discount numeric,
   subtotal numeric, adj_before numeric,
   moving_cost_adjusted numeric, travel_cost_adjusted numeric,
+  recache_and_rerun boolean,
   special_handling_cost_adjusted numeric, storage_cost numeric,
   packing_cost_adjusted numeric, cardboard_cost_adjusted numeric,
   surcharge_cubic_feet_cost_adjusted numeric,
@@ -899,11 +901,17 @@ DECLARE
     CREATE TEMP TABLE travel_plan_miles AS
     (SELECT
       travel_plans.latest_pc_id,
-      CASE when travel_plans.distance_minus_free < 0 THEN
+      CASE WHEN travel_plans.distance_minus_free < 0 THEN
         0
       ELSE
         travel_plans.distance_minus_free
-      END as distance_minus_free
+      END as distance_minus_free,
+      CASE WHEN travel_plans.distance_minus_free + travel_plans.free_miles <= 0 THEN
+        true
+      ELSE
+        false
+      END as recache_and_rerun,
+      travel_plans.free_miles as free_miles
       FROM
     (SELECT
         mwlabr.latest_pc_id,
@@ -996,7 +1004,8 @@ DECLARE
       END)
 
         --SUBTRACT FREE MILES FOR ALL MOVES
-        - price_charts.free_miles) AS distance_minus_free
+        - price_charts.free_miles) AS distance_minus_free,
+        price_charts.free_miles as free_miles
        FROM movers_with_location_and_balancing_rate AS mwlabr
         JOIN price_charts
         ON mwlabr.latest_pc_id = price_charts.id
@@ -1219,6 +1228,9 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
                 0.00
               END),
           2) AS travel_cost_adjusted,
+
+        --ADD RECACHE AND RERUN COLUMN FOR BID MODEL
+						travel_plan_miles.recache_and_rerun as recache_and_rerun,
 
         --SPECIAL HANDLING COST ADJUSTED
 
