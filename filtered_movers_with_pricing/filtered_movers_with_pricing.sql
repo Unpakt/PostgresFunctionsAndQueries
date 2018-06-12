@@ -248,9 +248,10 @@ DECLARE
 	        AND (CASE WHEN mover_param IS NOT NULL THEN
 	             movers.id = any(mover_param)
 	            ELSE 1=1 END)
-	        AND branchable_type = 'Mover'
-	        AND marketplace_status = 'live'
-	        AND (movers.is_hidden = false OR movers.id = any(white_label_movers))
+	        AND (
+	            (branchable_type = 'Mover'AND marketplace_status = 'live' AND (movers.is_hidden = false OR movers.id = any(white_label_movers)))
+            OR
+              for_bid = true)
 	      JOIN (SELECT
 	              id as latest_pc_id,
 	              price_charts.mover_id AS pc_mover_id,
@@ -299,7 +300,7 @@ DECLARE
 	                pu_earth))
 
 	            --LESS THAN MAX CUBIC FEET
-	            AND (price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet)
+	            AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_bid = true)
 	          JOIN additional_services
 	            ON additional_services.price_chart_id = price_charts.id
 	          JOIN storage_details
@@ -342,7 +343,7 @@ DECLARE
 	                pu_earth))
 
 	            --LESS THAN MAX CUBIC FEET
-	            AND (price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet)
+	            AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_bid = true)
 	          JOIN additional_services
 	            ON additional_services.price_chart_id = price_charts.id
 	          JOIN storage_details
@@ -1568,10 +1569,6 @@ IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 	UPDATE movers_and_pricing SET mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + mover_cut_adj),0.00) FROM movers_and_pricing AS mp ;
 	UPDATE movers_and_pricing SET unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + unpakt_fee_adj),0.00) FROM movers_and_pricing AS mp;
 END IF;
-
-
-
-
 
 RETURN QUERY SELECT * FROM movers_and_pricing ORDER BY (
   (movers_and_pricing.local_consult_only OR movers_and_pricing.interstate_consult_only),movers_and_pricing.total
