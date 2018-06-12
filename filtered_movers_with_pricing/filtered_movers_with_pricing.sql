@@ -2,8 +2,8 @@ SELECT * FROM potential_movers('4451bb62-6e62-11e8-98af-95c136308632');
 SELECT * FROM filtered_movers_with_pricing('4956be4c-3ff9-11e8-9ea1-0f461a27ccab',null,false,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
-SELECT * FROM filtered_movers_with_pricing('4451bb62-6e62-11e8-98af-95c136308632');
-SELECT * FROM filtered_movers_with_pricing('b939368e-0527-11e8-3db1-0f461a27ccab','{752}',false,true);
+SELECT * FROM filtered_movers_with_pricing('fff76706-fd86-11e7-ac9d-41df8e0f4b38');
+SELECT * FROM filtered_movers_with_pricing('70ac15bc-3a65-11e8-d99b-0f461a27ccab','{752}',false,true);
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('fff76706-fd86-11e7-ac9d-41df8e0f4b38',null,true);
@@ -911,6 +911,7 @@ DECLARE
       ELSE
         false
       END as recache_and_rerun,
+      distance_diagnostics,
       travel_plans.free_miles as free_miles
       FROM
     (SELECT
@@ -1005,6 +1006,93 @@ DECLARE
 
         --SUBTRACT FREE MILES FOR ALL MOVES
         - price_charts.free_miles) AS distance_minus_free,
+       --WAREHOUSE TO PICK UP DISTANCE
+        'wh(' ||pu_key|| ')->pu(' || price_charts.distance_cache_key || '):' || COALESCE((SELECT * FROM distance_in_miles(price_charts.distance_cache_key,pu_key)),0.00) || ', ' ||
+
+          --HANDLE LOCAL
+        CAST((CASE WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NULL THEN
+
+             --HANDLE EXTRA PICK UP
+           CAST((CASE WHEN epu_state IS NOT NULL THEN
+
+               --PICK UP TO EXTRA PICK UP DISTANCE
+             'pu(' || pu_key || ')->epu(' || epu_key || '):' || COALESCE((SELECT * FROM distance_in_miles(pu_key,epu_key)),0.00) || ' + ' ||
+
+               --EXTRA PICK UP TO DROP OFF DISTANCE
+             'epu(' || epu_key || ')->do(' ||do_key|| '):' || COALESCE((SELECT * FROM distance_in_miles(epu_key,do_key)),0.00) || ', '
+           ELSE
+
+               --PICK UP TO DROP OFF DISTANCE
+             'pu(' || pu_key || ')->do(' ||do_key|| '):' || COALESCE((SELECT * FROM distance_in_miles(pu_key,do_key)),0.00) || ', '
+           END) AS varchar) ||
+
+             --HANDLE EXTRA DROP OFF
+           CAST((CASE WHEN edo_state IS NOT NULL THEN
+
+               --DROP OFF TO EXTRA DROP OFF DISTANCE
+             'do(' || do_key || ')->edo(' || edo_key || '):' || COALESCE((SELECT * FROM distance_in_miles(do_key,edo_key)),0.00)  || ' + ' ||
+
+               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
+            'edo(' || edo_key || ')->wh(' || price_charts.distance_cache_key || '):' || COALESCE((SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key)),0.00) || ', '
+          ELSE
+
+               --DROP OFF TO WAREHOUSE DISTANCE
+            'do(' || do_key || ')->wh(' || price_charts.distance_cache_key || '):' || COALESCE((SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)),0.00)
+           END) AS varchar)
+          --HANDLE LOCAL SIT
+        WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+
+             --HANDLE EXTRA PICK UP
+           CAST((CASE WHEN epu_state IS NOT NULL THEN
+
+               --PICK UP TO EXTRA PICK UP DISTANCE
+             'pu(' || pu_key || ')->epu(' || epu_key || '):' || COALESCE((SELECT * FROM distance_in_miles(pu_key,epu_key)),0.00) || ' + ' ||
+
+               --EXTRA PICK UP TO WAREHOUSE DISTANCE
+             'epu(' || epu_key || ')->wh('|| price_charts.distance_cache_key || '):' || COALESCE((SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key)),0.00) || ', '
+           ELSE
+
+               --PICK UP TO WAREHOUSE DISTANCE
+             'pu(' || pu_key || ')->wh('|| price_charts.distance_cache_key || '):' || COALESCE((SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key)),0.00) || ', '
+           END) AS varchar) ||
+
+             --HANDLE EXTRA DROP OFF
+           CAST((CASE WHEN edo_state IS NOT NULL THEN
+
+               --WAREHOUSE TO DROP OFF DISTANCE
+             'wh(' || price_charts.distance_cache_key || ')->do(' || do_key || '):' || COALESCE((SELECT * FROM distance_in_miles(price_charts.distance_cache_key,do_key)),0.00)  || ' + ' ||
+
+               --DROP OFF TO EXTRA DROP OFF DISTANCE
+             'do(' || do_key || ')->edo(' || edo_key || '):' || COALESCE((SELECT * FROM distance_in_miles(do_key,edo_key)),0.00)  || ' + ' ||
+
+               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
+             'edo(' || edo_key || ')->wh(' || price_charts.distance_cache_key || '):' || COALESCE((SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key)),0.00) || ', '
+           ELSE
+
+               --DROP OFF TO WAREHOUSE DISTANCE
+             'do(' || do_key || ')->wh(' || price_charts.distance_cache_key || '):' || COALESCE((SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)),0.00) * 2 || '|2x, '
+           END) AS varchar) ||
+
+           --SUBTRACT EXTRA FREE MILES FOR LOCAL SIT
+           'free:' || (-1*price_charts.free_miles)
+       --HANDLE LONG DISTANCE AND MOVE INTO STORAGE
+      ELSE
+        CAST((CASE WHEN epu_state IS NOT NULL THEN
+
+            --PICK UP TO EXTRA PICK UP DISTANCE
+          'pu(' || pu_key || ')->epu(' || epu_key || '):' || COALESCE((SELECT * FROM distance_in_miles(pu_key,epu_key)),0.00) || ' + ' ||
+
+            --EXTRA PICK UP TO WAREHOUSE DISTANCE
+          'epu(' || epu_key || ')->wh('|| price_charts.distance_cache_key || '):' || COALESCE((SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key)),0.00)
+        ELSE
+
+            --PICK UP TO WAREHOUSE DISTANCE
+          'pu(' || pu_key || ')->wh(' || price_charts.distance_cache_key || '):' || COALESCE((SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key)),0.00)
+        END) AS varchar)
+      END) AS varchar)
+
+        --SUBTRACT FREE MILES FOR ALL MOVES
+        || ' free:' || (-1*price_charts.free_miles) AS distance_diagnostics,
         price_charts.free_miles as free_miles
        FROM movers_with_location_and_balancing_rate AS mwlabr
         JOIN price_charts
