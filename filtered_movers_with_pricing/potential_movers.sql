@@ -51,11 +51,7 @@ DECLARE
     CREATE TEMP TABLE potential_movers AS SELECT
         branch_properties.name as mover_name,
         movers.id,
-        CASE WHEN frozen_mover_id = movers.id THEN
-          frozen_pc_id
-        ELSE
-          latest_pc.latest_pc_id
-        END as latest_pc_id,
+        latest_pc.latest_pc_id,
         movers.local_consult_only,
         movers.interstate_consult_only
       FROM movers
@@ -72,10 +68,22 @@ DECLARE
 	              price_charts.mover_id AS pc_mover_id,
 	              rank() OVER(
 	                PARTITION BY price_charts.mover_id
-	                ORDER BY created_at DESC)
+	                ORDER BY created_at DESC) as rank
 	            FROM public.price_charts) as latest_pc
-	        ON pc_mover_id = movers.id
-	        AND ((RANK = 1 AND latest_pc.pc_mover_id <> frozen_mover_id) OR latest_pc.latest_pc_id = frozen_pc_id);
+	        ON latest_pc.pc_mover_id = movers.id
+	        AND
+		        CASE WHEN frozen_mover_id IS NULL THEN
+		          latest_pc.rank = 1
+		          ELSE
+		          ((latest_pc.rank = 1 AND latest_pc.pc_mover_id <> frozen_mover_id) OR latest_pc.latest_pc_id = frozen_pc_id)
+	          END;
+
+      --RAISE NO MOVER FOUND ERROR
+      IF (SELECT COUNT(*) FROM potential_movers) = 0 THEN
+        RAISE EXCEPTION 'No eligible movers';
+      END IF;
+
+
     --FIND MOVE PLAN INVENTORY ITEMS
     DROP TABLE IF EXISTS mp_ii;
     CREATE TEMP TABLE mp_ii AS (

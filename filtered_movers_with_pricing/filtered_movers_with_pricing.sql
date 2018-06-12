@@ -1,8 +1,8 @@
-SELECT * FROM potential_movers('4956be4c-3ff9-11e8-9ea1-0f461a27ccab');
+SELECT * FROM potential_movers('4451bb62-6e62-11e8-98af-95c136308632');
 SELECT * FROM filtered_movers_with_pricing('4956be4c-3ff9-11e8-9ea1-0f461a27ccab',null,false,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
-SELECT * FROM filtered_movers_with_pricing('c267dde6-f046-11e7-3da4-0f461a27ccab');
+SELECT * FROM filtered_movers_with_pricing('4451bb62-6e62-11e8-98af-95c136308632');
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('fff76706-fd86-11e7-ac9d-41df8e0f4b38',null,true);
@@ -257,10 +257,22 @@ DECLARE
 	              price_charts.mover_id AS pc_mover_id,
 	              rank() OVER(
 	                PARTITION BY price_charts.mover_id
-	                ORDER BY created_at DESC)
+	                ORDER BY created_at DESC) as rank
 	            FROM public.price_charts) as latest_pc
 	        ON pc_mover_id = movers.id
-	        AND ((RANK = 1 AND latest_pc.pc_mover_id <> frozen_mover_id) OR latest_pc.latest_pc_id = frozen_pc_id);
+	        AND
+		        CASE WHEN frozen_mover_id IS NULL THEN
+		          latest_pc.rank = 1
+		          ELSE
+		          ((latest_pc.rank = 1 AND latest_pc.pc_mover_id <> frozen_mover_id) OR latest_pc.latest_pc_id = frozen_pc_id)
+	          END;
+
+      --RAISE NO MOVER FOUND ERROR
+      IF (SELECT COUNT(*) FROM potential_movers) = 0 THEN
+        RAISE EXCEPTION 'No eligible movers';
+      END IF;
+
+
 
 	    --FILTER BY HAUL TYPE, PICK UP DISTANCE, INTRA/INTER(STATE) CERTIFICATION, MAX CUBIC FEET, MINIMUM DISTANCE
 	    DROP TABLE IF EXISTS movers_by_haul;
