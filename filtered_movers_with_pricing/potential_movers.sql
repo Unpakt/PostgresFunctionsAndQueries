@@ -75,7 +75,7 @@ DECLARE
 	                ORDER BY created_at DESC)
 	            FROM public.price_charts) as latest_pc
 	        ON pc_mover_id = movers.id
-	        AND ((RANK = 1 AND latest_pc.latest_pc_id <> frozen_pc_id) OR latest_pc.latest_pc_id = frozen_pc_id);
+	        AND ((RANK = 1 AND latest_pc.pc_mover_id <> frozen_mover_id) OR latest_pc.latest_pc_id = frozen_pc_id);
     --FIND MOVE PLAN INVENTORY ITEMS
     DROP TABLE IF EXISTS mp_ii;
     CREATE TEMP TABLE mp_ii AS (
