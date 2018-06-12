@@ -67,16 +67,15 @@ DECLARE
         AND (CASE WHEN mover_param IS NOT NULL THEN
              movers.id = any(mover_param)
             ELSE 1=1 END)
-      JOIN (SELECT
-              id as latest_pc_id,
-              price_charts.mover_id AS pc_mover_id,
-              rank() OVER(
-                PARTITION BY price_charts.mover_id
-                ORDER BY created_at DESC)
-            FROM public.price_charts) as latest_pc
-        ON pc_mover_id = movers.id
-        AND RANK = 1;
-
+	      JOIN (SELECT
+	              id as latest_pc_id,
+	              price_charts.mover_id AS pc_mover_id,
+	              rank() OVER(
+	                PARTITION BY price_charts.mover_id
+	                ORDER BY created_at DESC)
+	            FROM public.price_charts) as latest_pc
+	        ON pc_mover_id = movers.id
+	        AND ((RANK = 1 AND latest_pc.latest_pc_id <> frozen_pc_id) OR latest_pc.latest_pc_id = frozen_pc_id);
     --FIND MOVE PLAN INVENTORY ITEMS
     DROP TABLE IF EXISTS mp_ii;
     CREATE TEMP TABLE mp_ii AS (
