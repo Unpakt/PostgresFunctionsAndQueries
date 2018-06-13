@@ -8,6 +8,7 @@ SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('fff76706-fd86-11e7-ac9d-41df8e0f4b38',null,true);
 
+
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
   RETURNS numeric AS
@@ -41,6 +42,7 @@ RETURNS TABLE(
   total numeric, total_adjustments numeric,
   mover_cut numeric, unpakt_fee numeric,
   coupon_discount numeric, mover_special_discount numeric,
+  mover_special_percentage INTEGER,
   twitter_discount numeric, facebook_discount numeric,
   subtotal numeric, adj_before numeric,
   moving_cost_adjusted numeric, travel_cost_adjusted numeric,
@@ -1520,6 +1522,12 @@ CREATE TEMP TABLE movers_and_pricing AS (
         END)
       END
       ),2),0.00) AS mover_special_discount,
+      (CASE WHEN subtotal.location_type = 'local' THEN
+          COALESCE((SELECT discount_percentage FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND percentage = true AND short_haul = true LIMIT 1),0)
+      ELSE
+          COALESCE((SELECT discount_percentage FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND percentage = true AND long_haul = true LIMIT 1),0)
+      END
+      ) AS mover_special_percentage,
 
       --TWITTER DISCOUNT
       CASE WHEN (SELECT mp.shared_on_twitter = true FROM mp) THEN
@@ -1615,6 +1623,7 @@ CREATE FUNCTION comparison_presenter_v4(move_plan_param VARCHAR, mover_param INT
   is_featured boolean,
   logo_url varchar,
   mover_special numeric,
+  mover_special_percentage integer,
   name varchar,
   number_of_employees integer,
   number_of_trucks integer,
@@ -1645,7 +1654,7 @@ RETURN QUERY
 (SELECT
 	uniq.branch_property_id, uniq.city_state_label, uniq.consult_only, uniq.dedicated,
 	uniq.maximum_delivery_days, uniq.minimum_delivery_days,	uniq.grade, uniq.id,
-	uniq.is_featured, uniq.logo_url, uniq.mover_special, uniq.name, uniq.number_of_employees,
+	uniq.is_featured, uniq.logo_url, uniq.mover_special, uniq.mover_special_percentage, uniq.name, uniq.number_of_employees,
 	uniq.number_of_trucks, uniq.moving, uniq.packing_cost, uniq.special_handling_cost,
 	uniq.storage_cost, uniq.profile_path, uniq.google_link, uniq.google_number_of_reviews,
 	uniq.google_rating, uniq.google_rounded_rating, uniq.unpakt_link, uniq.unpakt_number_of_reviews,
@@ -1672,6 +1681,7 @@ FROM
         movers.is_featured,
         bp.logo_image AS logo_url,
         -1.00 * pricing.mover_special_discount AS mover_special,
+        pricing.mover_special_percentage AS mover_special_percentage,
         COALESCE(bp.trade_name,bp.name) AS name,
         bp.vendor_id,
         movers.number_of_employees,
