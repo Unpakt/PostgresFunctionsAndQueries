@@ -1600,8 +1600,8 @@ IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 		END LOOP;
 	END IF;
 	UPDATE movers_and_pricing SET
-		total = mp.total + mover_cut_adj + unpakt_fee_adj,
-	  total_adjustments = mp.total_adjustments + mover_cut_adj + unpakt_fee_adj,
+		total = mp.total + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
+	  total_adjustments = mp.total_adjustments + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
 	  mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + mover_cut_adj),0.00),
 	  unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + unpakt_fee_adj),0.00)
   FROM movers_and_pricing AS mp;
