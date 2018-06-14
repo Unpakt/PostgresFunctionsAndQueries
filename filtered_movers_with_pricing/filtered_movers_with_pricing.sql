@@ -1547,13 +1547,14 @@ CREATE TEMP TABLE movers_and_pricing AS (
     FROM movers_and_pricing_subtotal AS subtotal
 ) AS total);
 
+IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
+
+new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
 IF
 	(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both') > 0
 	AND for_bid = true
 	AND (SELECT count(*) FROM movers_and_pricing) = 1
 THEN
-	new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
-	old_total := new_total;
 	FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both' ORDER BY created_at ASC
 	LOOP
 		IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
@@ -1569,11 +1570,9 @@ THEN
 	UPDATE movers_and_pricing SET total = new_total;
 	UPDATE movers_and_pricing SET total_adjustments = before_adj + after_adj;
 END IF;
-
-IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
-	unpakt_fee_sub := old_total;
-	mover_cut_sub := old_total;
 	IF (SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both') > 0 THEN
+		unpakt_fee_sub := new_total;
+		mover_cut_sub := new_total;
 		FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both' ORDER BY created_at ASC
 		LOOP
 			IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
@@ -1595,15 +1594,14 @@ IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 					unpakt_fee_sub := unpakt_fee_sub + adj.amount_in_cents/100.00;
 				END IF;
 			END IF;
-			RAISE NOTICE 'mover_adj = %', after_adj;
-			RAISE NOTICE 'unpakt_adj = %', after_adj;
+			RAISE NOTICE 'mover_adj = %', mover_cut_adj;
+			RAISE NOTICE 'unpakt_adj = %', unpakt_fee_adj;
 		END LOOP;
-	END IF;
-	UPDATE movers_and_pricing SET
+	END IF;UPDATE movers_and_pricing SET
 		total = mp.total + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
 	  total_adjustments = mp.total_adjustments + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
-	  mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + mover_cut_adj),0.00),
-	  unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + unpakt_fee_adj),0.00)
+	  mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + COALESCE(mover_cut_adj,0.00)),0.00),
+	  unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + COALESCE(unpakt_fee_adj,0.00)),0.00)
   FROM movers_and_pricing AS mp;
 END IF;
 
