@@ -117,10 +117,9 @@ DECLARE
     sit_date := (SELECT storage_move_out_date FROM mp);
     box_date := (SELECT box_delivery_date FROM mp);
     box_dow := (SELECT EXTRACT(isodow FROM box_date :: DATE));
-    mp_coupon_id := (
-      SELECT COALESCE(
-          (SELECT coupon_id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state <> 'cancelled' AND mover_state <> 'declined' ORDER BY jobs.id LIMIT 1),
-          (SELECT coupon_id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state = 'cancelled' ORDER BY jobs.id DESC LIMIT 1)));
+    mp_coupon_id := (SELECT coupon_id FROM jobs WHERE id = COALESCE(
+          (SELECT id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state <> 'cancelled' AND mover_state <> 'declined' ORDER BY jobs.id LIMIT 1),
+          (SELECT id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state = 'cancelled' ORDER BY jobs.id DESC LIMIT 1)));
 		before_adj := 0.00;
 		after_adj := 0.00;
 		unpakt_fee_sub := 0.00;
