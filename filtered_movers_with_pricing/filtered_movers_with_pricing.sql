@@ -36,8 +36,9 @@ $func$ LANGUAGE plpgsql;
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN);
-DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN);
-CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false, for_bid BOOLEAN DEFAULT false)
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN);;
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, BOOLEAN);
+CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false, for_bid BOOLEAN DEFAULT false, for_reschedule BOOLEAN DEFAULT false)
 RETURNS TABLE(
   total numeric, total_adjustments numeric,
   mover_cut numeric, unpakt_fee numeric,
@@ -700,9 +701,17 @@ DECLARE
 	        (SELECT
 	          mwl.*,
 
-	          --BALANCING RATE
-	          COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary) AS balancing_rate_primary,
-	          COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary) AS balancing_rate_secondary,
+	          --BALANCING RATE WITH RESCHEDULING NONSENSE
+	          CASE WHEN for_reschedule = false THEN
+	            COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary)
+	          ELSE
+	            COALESCE(frz_daily.balancing_rate_primary, frz_weekly.balancing_rate_primary)
+            END AS balancing_rate_primary,
+	          CASE WHEN for_reschedule = false THEN
+	            COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary)
+	          ELSE
+	            COALESCE(frz_daily.balancing_rate_secondary, frz_weekly.balancing_rate_secondary)
+            END AS balancing_rate_primary,
 
 	          --AVAILABILITY CALCULATIONS
 	          CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
