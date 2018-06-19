@@ -125,9 +125,18 @@ DECLARE
 	    (SELECT frozen_price_chart_id FROM mp));
     frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
     frozen_mover_latest_pc_id := (SELECT price_charts.id FROM price_charts WHERE price_charts.mover_id = frozen_mover_id ORDER BY created_at DESC LIMIT 1);
-    mov_date := COALESCE(reschedule_date, (SELECT move_date FROM mp));
-    mov_time := COALESCE(reschedule_time, (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp));
-    sit_date := COALESCE(reschedule_sit_date, (SELECT storage_move_out_date FROM mp));
+    IF reschedule_date IS NOT NULL THEN
+      UPDATE mp SET move_date = reschedule_date;
+    END IF;
+    IF reschedule_time IS NOT NULL THEN
+      UPDATE mp SET move_time = reschedule_time;
+    END IF;
+    IF reschedule_sit_date IS NOT NULL THEN
+      UPDATE mp SET storage_move_out_date = reschedule_sit_date;
+    END IF;
+    mov_date := (SELECT move_date FROM mp);
+    mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp);
+    sit_date := (SELECT storage_move_out_date FROM mp);
     box_date := (SELECT box_delivery_date FROM mp);
     box_dow := (SELECT EXTRACT(isodow FROM box_date :: DATE));
     mp_coupon_id := (SELECT coupon_id FROM jobs WHERE id = COALESCE(
