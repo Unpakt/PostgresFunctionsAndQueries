@@ -38,12 +38,17 @@ DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, BOOLEAN);
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER);
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE);
 CREATE FUNCTION filtered_movers_with_pricing(
 	move_plan_param VARCHAR,
 	mover_param INTEGER[] DEFAULT NULL,
 	select_from_temp BOOLEAN DEFAULT false,
 	for_bid BOOLEAN DEFAULT false,
-	for_reschedule BOOLEAN DEFAULT false)
+	reschedule_pc_id INTEGER DEFAULT NULL,
+	reschedule_time VARCHAR DEFAULT NULL,
+	reschedule_date DATE DEFAULT NULL,
+	reschedule_sit_date DATE DEFAULT NULL)
 RETURNS TABLE(
   total numeric, total_adjustments numeric,
   mover_cut numeric, unpakt_fee numeric,
@@ -114,14 +119,15 @@ DECLARE
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     commission := (SELECT bid_commission_rate FROM mp);
     white_label_movers := (SELECT array_agg(white_label_whitelists.mover_id) FROM white_label_whitelists WHERE white_label_id = (SELECT white_label_id FROM mp));
-    IF for_reschedule = false THEN
-	    frozen_pc_id := COALESCE((SELECT jobs.price_chart_id FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1),(SELECT frozen_price_chart_id FROM mp));
-	    frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
-	    frozen_mover_latest_pc_id := (SELECT price_charts.id FROM price_charts WHERE price_charts.mover_id = frozen_mover_id ORDER BY created_at DESC LIMIT 1);
-    END IF;
-    mov_date := (SELECT move_date FROM mp);
-    mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp );
-    sit_date := (SELECT storage_move_out_date FROM mp);
+    frozen_pc_id := COALESCE(
+	    reschedule_pc_id,
+	    (SELECT jobs.price_chart_id FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1),
+	    (SELECT frozen_price_chart_id FROM mp));
+    frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
+    frozen_mover_latest_pc_id := (SELECT price_charts.id FROM price_charts WHERE price_charts.mover_id = frozen_mover_id ORDER BY created_at DESC LIMIT 1);
+    mov_date := COALESCE(reschedule_date, (SELECT move_date FROM mp));
+    mov_time := COALESCE(reschedule_time, (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp));
+    sit_date := COALESCE(reschedule_sit_date, (SELECT storage_move_out_date FROM mp));
     box_date := (SELECT box_delivery_date FROM mp);
     box_dow := (SELECT EXTRACT(isodow FROM box_date :: DATE));
     mp_coupon_id := (SELECT coupon_id FROM jobs WHERE id = COALESCE(
