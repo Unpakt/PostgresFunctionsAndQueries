@@ -40,6 +40,7 @@ DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, BOOLEAN);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE);
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE,DATE);
 CREATE FUNCTION filtered_movers_with_pricing(
 	move_plan_param VARCHAR,
 	mover_param INTEGER[] DEFAULT NULL,
@@ -48,7 +49,8 @@ CREATE FUNCTION filtered_movers_with_pricing(
 	reschedule_pc_id INTEGER DEFAULT NULL,
 	reschedule_time VARCHAR DEFAULT NULL,
 	reschedule_date DATE DEFAULT NULL,
-	reschedule_sit_date DATE DEFAULT NULL)
+	reschedule_sit_date DATE DEFAULT NULL,
+	reschedule_box_date DATE DEFAULT NULL)
 RETURNS TABLE(
   total numeric, total_adjustments numeric,
   mover_cut numeric, unpakt_fee numeric,
@@ -134,6 +136,9 @@ DECLARE
     IF reschedule_sit_date IS NOT NULL THEN
       UPDATE mp SET storage_move_out_date = reschedule_sit_date;
     END IF;
+    IF reschedule_box_date IS NOT NULL THEN
+			UPDATE mp SET box_delivery_date = reschedule_box_date;
+		END IF;
     mov_date := (SELECT move_date FROM mp);
     mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp);
     sit_date := (SELECT storage_move_out_date FROM mp);
