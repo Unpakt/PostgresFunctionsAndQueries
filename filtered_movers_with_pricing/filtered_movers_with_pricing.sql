@@ -137,7 +137,11 @@ DECLARE
       UPDATE mp SET storage_move_out_date = reschedule_sit_date;
     END IF;
     IF reschedule_box_date IS NOT NULL THEN
-			UPDATE mp SET box_delivery_date = reschedule_box_date;
+      IF reschedule_box_date = '11/11/1111' THEN
+				UPDATE mp SET box_delivery_date = NULL;
+			ELSE
+				UPDATE mp SET box_delivery_date = reschedule_box_date;
+			END IF;
 		END IF;
     mov_date := (SELECT move_date FROM mp);
     mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp);
