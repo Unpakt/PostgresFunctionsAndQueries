@@ -946,7 +946,7 @@ DECLARE
         mwlabr.latest_pc_id,
 
         --WAREHOUSE TO PICK UP DISTANCE
-      array[(SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))]::float[] ||
+      array[(SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))]::numeric[] ||
 
           --HANDLE LOCAL
         (CASE WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NULL THEN
@@ -958,11 +958,11 @@ DECLARE
             array[(SELECT * FROM distance_in_miles(pu_key,epu_key)),
 
               --EXTRA PICK UP TO DROP OFF DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,do_key))]::float[]
+            (SELECT * FROM distance_in_miles(epu_key,do_key))]::numeric[]
           ELSE
 
               --PICK UP TO DROP OFF DISTANCE
-            array[(SELECT * FROM distance_in_miles(pu_key,do_key))]::float[]
+            array[(SELECT * FROM distance_in_miles(pu_key,do_key))]::numeric[]
           END) ||
 
             --HANDLE EXTRA DROP OFF
@@ -972,11 +972,11 @@ DECLARE
             array[(SELECT * FROM distance_in_miles(do_key,edo_key)),
 
               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))]::float[]
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))]::numeric[]
           ELSE
 
               --DROP OFF TO WAREHOUSE DISTANCE
-            array[(SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key))]::float[]
+            array[(SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key))]::numeric[]
           END)
 
           --HANDLE LOCAL SIT
@@ -989,11 +989,11 @@ DECLARE
             array[(SELECT * FROM distance_in_miles(pu_key,epu_key)),
 
               --EXTRA PICK UP TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))]::float[]
+            (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))]::numeric[]
           ELSE
 
               --PICK UP TO WAREHOUSE DISTANCE
-            array[(SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))]::float[]
+            array[(SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))]::numeric[]
           END) ||
 
             --HANDLE EXTRA DROP OFF
@@ -1006,15 +1006,15 @@ DECLARE
             (SELECT * FROM distance_in_miles(do_key,edo_key)),
 
               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))]::float[]
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))]::numeric[]
           ELSE
 
               --DROP OFF TO WAREHOUSE DISTANCE
-           array[(SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)) * 2]::float[]
+           array[(SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)) * 2]::numeric[]
           END) ||
 
           --SUBTRACT EXTRA FREE MILES FOR LOCAL SIT
-           array[-1* price_charts.free_miles]::float[]
+           array[-1* price_charts.free_miles]::numeric[]
 
       --HANDLE LONG DISTANCE AND MOVE INTO STORAGE
       ELSE
@@ -1024,16 +1024,16 @@ DECLARE
           array[(SELECT * FROM distance_in_miles(pu_key,epu_key)),
 
             --EXTRA PICK UP TO WAREHOUSE DISTANCE
-          (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))]::float[]
+          (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))]::numeric[]
         ELSE
 
             --PICK UP TO WAREHOUSE DISTANCE
-          array[(SELECT * FROM distance_in_miles(price_charts.distance_cache_key,pu_key))]::float[]
+          array[(SELECT * FROM distance_in_miles(price_charts.distance_cache_key,pu_key))]::numeric[]
         END)
       END)
 
         --SUBTRACT FREE MILES FOR ALL MOVES
-        || array[-1*price_charts.free_miles]::float[] AS distance_minus_free,
+        || array[-1*price_charts.free_miles]::numeric[] AS distance_minus_free,
         price_charts.free_miles as free_miles
        FROM movers_with_location_and_balancing_rate AS mwlabr
         JOIN price_charts
@@ -1044,10 +1044,10 @@ DECLARE
     FOR tp IN SELECT * FROM travel_plan_miles
 		LOOP
 			UPDATE travel_plan_miles SET
-			distance_minus_free = (SELECT
+			distance_minus_free = greatest((SELECT
 				sum(unnested.unnest)
 				FROM
-				(SELECT unnest(tp.distance_minus_free_array)) as unnested),
+				(SELECT unnest(tp.distance_minus_free_array)) as unnested), 0.00),
 			recache_and_rerun = (SELECT
 				string_agg(coalesce(to_char(unnested.unnest,'9D9'),'NULL'), ',') LIKE '%NULL%' as test
 				FROM
