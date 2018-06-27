@@ -100,7 +100,7 @@ DECLARE epu_state varchar;DECLARE epu_earth earth;DECLARE epu_key varchar;
 DECLARE do_state varchar; DECLARE do_earth earth; DECLARE do_key varchar;
 DECLARE edo_state varchar;DECLARE edo_earth earth;DECLARE edo_key varchar;
 
---DEFINE VARIABLES FOR LOOP
+--DEFINE VARIABLES FOR ADJUSTMENT LOOP
 DECLARE adj RECORD;
 DECLARE new_sub NUMERIC;
 DECLARE new_total NUMERIC;
@@ -110,6 +110,9 @@ DECLARE mover_cut_sub NUMERIC;
 DECLARE mover_cut_adj NUMERIC;
 DECLARE unpakt_fee_sub NUMERIC;
 DECLARE unpakt_fee_adj NUMERIC;
+
+--DEFINE VARIABLES FOR DISTANCE LOOP
+DECLARE tp RECORD;
 
 
 DECLARE
@@ -934,23 +937,16 @@ DECLARE
     CREATE TEMP TABLE travel_plan_miles AS
     (SELECT
       travel_plans.latest_pc_id,
-      CASE WHEN travel_plans.distance_minus_free < 0 THEN
-        0
-      ELSE
-        travel_plans.distance_minus_free
-      END as distance_minus_free,
-      CASE WHEN travel_plans.distance_minus_free + travel_plans.free_miles <= 0 THEN
-        true
-      ELSE
-        false
-      END as recache_and_rerun,
+      travel_plans.distance_minus_free as distance_minus_free_array,
+      0.00 as distance_minus_free,
+      false as recache_and_rerun,
       travel_plans.free_miles as free_miles
       FROM
     (SELECT
         mwlabr.latest_pc_id,
 
         --WAREHOUSE TO PICK UP DISTANCE
-      (COALESCE((SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key)),0.00) +
+      array[(SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))]::float[] ||
 
           --HANDLE LOCAL
         (CASE WHEN mwlabr.location_type = 'local' AND do_state IS NOT NULL AND (SELECT storage_move_out_date FROM mp) IS NULL THEN
@@ -959,28 +955,28 @@ DECLARE
           (CASE WHEN epu_state IS NOT NULL THEN
 
               --PICK UP TO EXTRA PICK UP DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(pu_key,epu_key)),0.00) +
+            array[(SELECT * FROM distance_in_miles(pu_key,epu_key)),
 
               --EXTRA PICK UP TO DROP OFF DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(epu_key,do_key)),0.00)
+            (SELECT * FROM distance_in_miles(epu_key,do_key))]::float[]
           ELSE
 
               --PICK UP TO DROP OFF DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(pu_key,do_key)),0.00)
-          END) +
+            array[(SELECT * FROM distance_in_miles(pu_key,do_key))]::float[]
+          END) ||
 
             --HANDLE EXTRA DROP OFF
           (CASE WHEN edo_state IS NOT NULL THEN
 
               --DROP OFF TO EXTRA DROP OFF DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(do_key,edo_key)),0.00) +
+            array[(SELECT * FROM distance_in_miles(do_key,edo_key)),
 
               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key)),0.00)
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))]::float[]
           ELSE
 
               --DROP OFF TO WAREHOUSE DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)),0.00)
+            array[(SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key))]::float[]
           END)
 
           --HANDLE LOCAL SIT
@@ -990,59 +986,74 @@ DECLARE
           (CASE WHEN epu_state IS NOT NULL THEN
 
               --PICK UP TO EXTRA PICK UP DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(pu_key,epu_key)),0.00)+
+            array[(SELECT * FROM distance_in_miles(pu_key,epu_key)),
 
               --EXTRA PICK UP TO WAREHOUSE DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key)),0.00)
+            (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))]::float[]
           ELSE
 
               --PICK UP TO WAREHOUSE DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key)),0.00)
-          END) +
+            array[(SELECT * FROM distance_in_miles(pu_key,price_charts.distance_cache_key))]::float[]
+          END) ||
 
             --HANDLE EXTRA DROP OFF
           (CASE WHEN edo_state IS NOT NULL THEN
 
               --WAREHOUSE TO DROP OFF DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(price_charts.distance_cache_key,do_key)),0.00) +
+            array[(SELECT * FROM distance_in_miles(price_charts.distance_cache_key,do_key)),
 
               --DROP OFF TO EXTRA DROP OFF DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(do_key,edo_key)),0.00) +
+            (SELECT * FROM distance_in_miles(do_key,edo_key)),
 
               --EXTRA DROP OFF TO WAREHOUSE DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key)),0.00)
+            (SELECT * FROM distance_in_miles(edo_key,price_charts.distance_cache_key))]::float[]
           ELSE
 
               --DROP OFF TO WAREHOUSE DISTANCE
-            COALESCE((SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)),0.00) * 2
-          END)
+           array[(SELECT * FROM distance_in_miles(do_key,price_charts.distance_cache_key)) * 2]::float[]
+          END) ||
 
           --SUBTRACT EXTRA FREE MILES FOR LOCAL SIT
-          - price_charts.free_miles
+           array[-1* price_charts.free_miles]::float[]
 
       --HANDLE LONG DISTANCE AND MOVE INTO STORAGE
       ELSE
         (CASE WHEN epu_state IS NOT NULL THEN
 
             --PICK UP TO EXTRA PICK UP DISTANCE
-          COALESCE((SELECT * FROM distance_in_miles(pu_key,epu_key)),0.00)+
+          array[(SELECT * FROM distance_in_miles(pu_key,epu_key)),
 
             --EXTRA PICK UP TO WAREHOUSE DISTANCE
-          COALESCE((SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key)),0.00)
+          (SELECT * FROM distance_in_miles(epu_key,price_charts.distance_cache_key))]::float[]
         ELSE
 
             --PICK UP TO WAREHOUSE DISTANCE
-          COALESCE((SELECT * FROM distance_in_miles(price_charts.distance_cache_key,pu_key)),0.00)
+          array[(SELECT * FROM distance_in_miles(price_charts.distance_cache_key,pu_key))]::float[]
         END)
       END)
 
         --SUBTRACT FREE MILES FOR ALL MOVES
-        - price_charts.free_miles) AS distance_minus_free,
+        || array[-1*price_charts.free_miles]::float[] AS distance_minus_free,
         price_charts.free_miles as free_miles
        FROM movers_with_location_and_balancing_rate AS mwlabr
         JOIN price_charts
         ON mwlabr.latest_pc_id = price_charts.id
     ) AS travel_plans );
+
+    -- LOOP THROUGH FLOAT ARRAY AND UPDATE BASE COLUMN FOR BETTER RECACHE AND RERUN FEEDBACK
+    FOR tp IN SELECT * FROM travel_plan_miles
+		LOOP
+			UPDATE travel_plan_miles SET
+			distance_minus_free = (SELECT
+				sum(unnested.unnest)
+				FROM
+				(SELECT unnest(tp.distance_minus_free_array)) as unnested),
+			recache_and_rerun = (SELECT
+				string_agg(coalesce(to_char(unnested.unnest,'9D9'),'NULL'), ',') LIKE '%NULL%' as test
+				FROM
+				(SELECT unnest(tp.distance_minus_free_array)) as unnested)
+			WHERE travel_plan_miles.latest_pc_id = tp.latest_pc_id;
+		END LOOP;
 
     --CRATING COST BY PRICE_CHART
     DROP TABLE IF EXISTS crating_cost_pc;
