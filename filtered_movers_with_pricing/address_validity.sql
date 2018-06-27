@@ -85,7 +85,7 @@ DECLARE
 			INSERT INTO address_errors VALUES ('This mover does not support this pick up location');
     END IF;
 
-    IF epu_geo IS NOT NULL AND ((SELECT earth_distance(epu_earth, pc_earth)) > pc_range OR pc_extra_stop_enabled) THEN
+    IF epu_geo IS NOT NULL AND ((SELECT earth_distance(epu_earth, pc_earth)) > pc_range OR pc_extra_stop_enabled = false) THEN
 			INSERT INTO address_errors VALUES ('This mover does not support this extra pick up location');
     END IF;
 

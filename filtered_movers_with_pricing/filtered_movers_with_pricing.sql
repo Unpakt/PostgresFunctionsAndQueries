@@ -8,6 +8,7 @@ SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
 SELECT * FROM comparison_presenter_v4('fff76706-fd86-11e7-ac9d-41df8e0f4b38',null,true);
 
+
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
   RETURNS numeric AS
@@ -36,11 +37,25 @@ DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN);
-CREATE FUNCTION filtered_movers_with_pricing(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false, for_bid BOOLEAN DEFAULT false)
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, BOOLEAN);
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER);
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE);
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE,DATE);
+CREATE FUNCTION filtered_movers_with_pricing(
+	move_plan_param VARCHAR,
+	mover_param INTEGER[] DEFAULT NULL,
+	select_from_temp BOOLEAN DEFAULT false,
+	for_bid BOOLEAN DEFAULT false,
+	reschedule_pc_id INTEGER DEFAULT NULL,
+	reschedule_time VARCHAR DEFAULT NULL,
+	reschedule_date DATE DEFAULT NULL,
+	reschedule_sit_date DATE DEFAULT NULL,
+	reschedule_box_date DATE DEFAULT NULL)
 RETURNS TABLE(
   total numeric, total_adjustments numeric,
   mover_cut numeric, unpakt_fee numeric,
   coupon_discount numeric, mover_special_discount numeric,
+  mover_special_percentage INTEGER,
   twitter_discount numeric, facebook_discount numeric,
   subtotal numeric, adj_before numeric,
   moving_cost_adjusted numeric, travel_cost_adjusted numeric,
@@ -88,7 +103,6 @@ DECLARE edo_state varchar;DECLARE edo_earth earth;DECLARE edo_key varchar;
 --DEFINE VARIABLES FOR LOOP
 DECLARE adj RECORD;
 DECLARE new_sub NUMERIC;
-DECLARE old_total NUMERIC;
 DECLARE new_total NUMERIC;
 DECLARE before_adj NUMERIC;
 DECLARE after_adj NUMERIC;
@@ -107,18 +121,36 @@ DECLARE
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     commission := (SELECT bid_commission_rate FROM mp);
     white_label_movers := (SELECT array_agg(white_label_whitelists.mover_id) FROM white_label_whitelists WHERE white_label_id = (SELECT white_label_id FROM mp));
-    frozen_pc_id := COALESCE((SELECT jobs.price_chart_id FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1),(SELECT frozen_price_chart_id FROM mp));
+    frozen_pc_id := COALESCE(
+	    reschedule_pc_id,
+	    (SELECT jobs.price_chart_id FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1),
+	    (SELECT frozen_price_chart_id FROM mp));
     frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
     frozen_mover_latest_pc_id := (SELECT price_charts.id FROM price_charts WHERE price_charts.mover_id = frozen_mover_id ORDER BY created_at DESC LIMIT 1);
+    IF reschedule_date IS NOT NULL THEN
+      UPDATE mp SET move_date = reschedule_date;
+    END IF;
+    IF reschedule_time IS NOT NULL THEN
+      UPDATE mp SET move_time = reschedule_time;
+    END IF;
+    IF reschedule_sit_date IS NOT NULL THEN
+      UPDATE mp SET storage_move_out_date = reschedule_sit_date;
+    END IF;
+    IF reschedule_box_date IS NOT NULL THEN
+      IF reschedule_box_date = '11/11/1111' THEN
+				UPDATE mp SET box_delivery_date = NULL;
+			ELSE
+				UPDATE mp SET box_delivery_date = reschedule_box_date;
+			END IF;
+		END IF;
     mov_date := (SELECT move_date FROM mp);
-    mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp );
+    mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp);
     sit_date := (SELECT storage_move_out_date FROM mp);
     box_date := (SELECT box_delivery_date FROM mp);
     box_dow := (SELECT EXTRACT(isodow FROM box_date :: DATE));
-    mp_coupon_id := (
-      SELECT COALESCE(
-          (SELECT coupon_id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state <> 'cancelled' AND mover_state <> 'declined' ORDER BY jobs.id LIMIT 1),
-          (SELECT coupon_id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state = 'cancelled' ORDER BY jobs.id DESC LIMIT 1)));
+    mp_coupon_id := (SELECT coupon_id FROM jobs WHERE id = COALESCE(
+          (SELECT id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state <> 'cancelled' AND mover_state <> 'declined' ORDER BY jobs.id LIMIT 1),
+          (SELECT id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state = 'cancelled' ORDER BY jobs.id DESC LIMIT 1)));
 		before_adj := 0.00;
 		after_adj := 0.00;
 		unpakt_fee_sub := 0.00;
@@ -247,11 +279,12 @@ DECLARE
 	      FROM movers
 	      JOIN branch_properties
 	        ON branchable_id = movers.id
+	        AND branchable_type = 'Mover'
 	        AND (CASE WHEN mover_param IS NOT NULL THEN
 	             movers.id = any(mover_param)
 	            ELSE 1=1 END)
 	        AND (
-	            (branchable_type = 'Mover'AND marketplace_status = 'live' AND (movers.is_hidden = false OR movers.id = any(white_label_movers)))
+	            (marketplace_status = 'live' AND (movers.is_hidden = false OR movers.id = any(white_label_movers)))
             OR
               for_bid = true)
 	      JOIN (SELECT
@@ -1608,6 +1641,12 @@ CREATE TEMP TABLE movers_and_pricing AS (
         END)
       END
       ),2),0.00) AS mover_special_discount,
+      (CASE WHEN subtotal.location_type = 'local' THEN
+          COALESCE((SELECT discount_percentage FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND percentage = true AND short_haul = true LIMIT 1),0)
+      ELSE
+          COALESCE((SELECT discount_percentage FROM mover_special_pc AS mspc WHERE mspc.price_chart_id = subtotal.latest_pc_id AND percentage = true AND long_haul = true LIMIT 1),0)
+      END
+      ) AS mover_special_percentage,
 
       --TWITTER DISCOUNT
       CASE WHEN (SELECT mp.shared_on_twitter = true FROM mp) THEN
@@ -1626,13 +1665,14 @@ CREATE TEMP TABLE movers_and_pricing AS (
     FROM movers_and_pricing_subtotal AS subtotal
 ) AS total);
 
+IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
+
+new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
 IF
 	(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both') > 0
 	AND for_bid = true
 	AND (SELECT count(*) FROM movers_and_pricing) = 1
 THEN
-	new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
-	old_total := new_total;
 	FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both' ORDER BY created_at ASC
 	LOOP
 		IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
@@ -1648,11 +1688,9 @@ THEN
 	UPDATE movers_and_pricing SET total = new_total;
 	UPDATE movers_and_pricing SET total_adjustments = before_adj + after_adj;
 END IF;
-
-IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
-	unpakt_fee_sub := old_total;
-	mover_cut_sub := old_total;
 	IF (SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both') > 0 THEN
+		unpakt_fee_sub := new_total;
+		mover_cut_sub := new_total;
 		FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both' ORDER BY created_at ASC
 		LOOP
 			IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
@@ -1674,12 +1712,15 @@ IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 					unpakt_fee_sub := unpakt_fee_sub + adj.amount_in_cents/100.00;
 				END IF;
 			END IF;
-			RAISE NOTICE 'mover_adj = %', after_adj;
-			RAISE NOTICE 'unpakt_adj = %', after_adj;
+			RAISE NOTICE 'mover_adj = %', mover_cut_adj;
+			RAISE NOTICE 'unpakt_adj = %', unpakt_fee_adj;
 		END LOOP;
-	END IF;
-	UPDATE movers_and_pricing SET mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + mover_cut_adj),0.00) FROM movers_and_pricing AS mp ;
-	UPDATE movers_and_pricing SET unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + unpakt_fee_adj),0.00) FROM movers_and_pricing AS mp;
+	END IF;UPDATE movers_and_pricing SET
+		total = mp.total + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
+	  total_adjustments = mp.total_adjustments + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
+	  mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + COALESCE(mover_cut_adj,0.00)),0.00),
+	  unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + COALESCE(unpakt_fee_adj,0.00)),0.00)
+  FROM movers_and_pricing AS mp;
 END IF;
 
 RETURN QUERY SELECT * FROM movers_and_pricing ORDER BY (
@@ -1703,6 +1744,7 @@ CREATE FUNCTION comparison_presenter_v4(move_plan_param VARCHAR, mover_param INT
   is_featured boolean,
   logo_url varchar,
   mover_special numeric,
+  mover_special_percentage integer,
   name varchar,
   number_of_employees integer,
   number_of_trucks integer,
@@ -1733,7 +1775,7 @@ RETURN QUERY
 (SELECT
 	uniq.branch_property_id, uniq.city_state_label, uniq.consult_only, uniq.dedicated,
 	uniq.maximum_delivery_days, uniq.minimum_delivery_days,	uniq.grade, uniq.id,
-	uniq.is_featured, uniq.logo_url, uniq.mover_special, uniq.name, uniq.number_of_employees,
+	uniq.is_featured, uniq.logo_url, uniq.mover_special, uniq.mover_special_percentage, uniq.name, uniq.number_of_employees,
 	uniq.number_of_trucks, uniq.moving, uniq.packing_cost, uniq.special_handling_cost,
 	uniq.storage_cost, uniq.profile_path, uniq.google_link, uniq.google_number_of_reviews,
 	uniq.google_rating, uniq.google_rounded_rating, uniq.unpakt_link, uniq.unpakt_number_of_reviews,
@@ -1760,6 +1802,7 @@ FROM
         movers.is_featured,
         bp.logo_image AS logo_url,
         -1.00 * pricing.mover_special_discount AS mover_special,
+        pricing.mover_special_percentage AS mover_special_percentage,
         COALESCE(bp.trade_name,bp.name) AS name,
         bp.vendor_id,
         movers.number_of_employees,
