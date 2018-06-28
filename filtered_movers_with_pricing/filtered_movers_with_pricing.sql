@@ -16,7 +16,7 @@ $func$
 BEGIN
 RETURN
 CASE WHEN pick_up = drop_off THEN
-	0
+	0.00
 ELSE
 	COALESCE(
   (SELECT distance_in_miles
@@ -1224,11 +1224,7 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
               END) +
 
               --DISTANCE COST ADJUSTED
-              (CASE WHEN travel_plan_miles.distance_minus_free < 0 THEN
-                0.00
-              ELSE
-                travel_plan_miles.distance_minus_free * price_charts.cents_per_mile / 100.00
-              END) +
+              travel_plan_miles.distance_minus_free * price_charts.cents_per_mile / 100.00 +
 
               --HANDLE EXTRA LONG DISTANCE COSTS
               (CASE WHEN mwlabr.location_type = 'local' THEN
@@ -1237,12 +1233,11 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
 
                 --LONG DISTANCE CUBIC FEET COST WITH PRICING TIERS
                 ((total_cubic_feet * mwlabr.cents_per_cubic_foot / 100.00 * COALESCE(long_distance_tiers_coefficient,1.00) ) + COALESCE(mwlabr.extra_fee,0.00)) +
-
                 --EXTRA DROP OFF LOCAL COST
                 (CASE WHEN edo_state IS NULL THEN
                   0.00
                 ELSE
-                  (SELECT * FROM distance_in_miles(do_key,edo_key)) * price_charts.cents_per_mile / 100.00
+                  COALESCE((SELECT * FROM distance_in_miles(do_key,edo_key)),0.00) * price_charts.cents_per_mile / 100.00
                 END)
               END) +
 
