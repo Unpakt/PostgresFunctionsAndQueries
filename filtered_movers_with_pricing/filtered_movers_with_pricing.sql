@@ -41,6 +41,7 @@ DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE,DATE);
+
 CREATE FUNCTION filtered_movers_with_pricing(
 	move_plan_param VARCHAR,
 	mover_param INTEGER[] DEFAULT NULL,
@@ -1636,8 +1637,8 @@ END IF;
 	END IF;UPDATE movers_and_pricing SET
 		total = mp.total + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
 	  total_adjustments = mp.total_adjustments + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
-	  mover_cut = GREATEST((((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + COALESCE(mover_cut_adj,0.00)),0.00),
-	  unpakt_fee = GREATEST((((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + COALESCE(unpakt_fee_adj,0.00)),0.00)
+	  mover_cut = (((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + COALESCE(mover_cut_adj,0.00)),
+	  unpakt_fee = (((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + COALESCE(unpakt_fee_adj,0.00))
   FROM movers_and_pricing AS mp;
 END IF;
 
