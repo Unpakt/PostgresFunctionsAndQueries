@@ -74,7 +74,8 @@ RETURNS TABLE(
   wall_dismounting boolean, box_delivery_range numeric,
   storage_in_transit boolean, warehousing boolean,
   local_cents_per_cubic_foot numeric, pu_lat numeric,
-  pu_long numeric, latest_pc_id integer,mover_earth earth,
+  pu_long numeric, latest_pc_id integer,
+  mover_earth earth, distance_to_pu numeric,
   local_consult_only boolean, interstate_consult_only boolean,
   mover_location_id integer,
   price_chart_id integer, cents_per_cubic_foot numeric,
@@ -319,7 +320,7 @@ DECLARE
 	    extra_stop_enabled boolean, packing boolean, unpacking boolean, box_delivery boolean, piano boolean, storage boolean,
 	    onsites boolean, callback boolean, crating boolean, disassembly_assembly boolean, wall_dismounting boolean,
 	    box_delivery_range numeric, storage_in_transit boolean, warehousing boolean, local_cents_per_cubic_foot numeric,
-	    pu_lat numeric, pu_long numeric, latest_pc_id integer, mover_earth earth, local_consult_only boolean, interstate_consult_only boolean);
+	    pu_lat numeric, pu_long numeric, latest_pc_id integer, mover_earth earth, distance_to_pu numeric, local_consult_only boolean, interstate_consult_only boolean);
 
 	    --INTERSTATE MOVES
 	    IF (SELECT count(distinct(state)) FROM mp_addresses) > 1 THEN
@@ -335,6 +336,7 @@ DECLARE
 	          price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
 	          price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
 	          (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
+	          (SELECT * FROM earth_distance(ll_to_earth(price_charts.latitude, price_charts.longitude), pu_earth))/1609.34 AS distance_to_pu,
 	          potential_movers.local_consult_only, potential_movers.interstate_consult_only
 	        FROM potential_movers
 	          JOIN price_charts
@@ -376,6 +378,7 @@ DECLARE
 	          price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
 	          price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
 	          (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
+	          (SELECT * FROM earth_distance(ll_to_earth(price_charts.latitude, price_charts.longitude), pu_earth))/1609.34 AS distance_to_pu,
 	          potential_movers.local_consult_only, potential_movers.interstate_consult_only
 	        FROM potential_movers
 	          JOIN price_charts
@@ -434,6 +437,7 @@ DECLARE
 	          price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
 	          price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
 	          (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
+	          (SELECT * FROM earth_distance(ll_to_earth(price_charts.latitude, price_charts.longitude), pu_earth))/1609.34 AS distance_to_pu,
 	          potential_movers.local_consult_only, potential_movers.interstate_consult_only
 	        FROM potential_movers
 	          JOIN price_charts
