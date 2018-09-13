@@ -1749,6 +1749,7 @@ FROM
         ROUND(ROUND(CAST(yelp.rating AS numeric) * 2.00)/2,1) AS yelp_rounded_rating,
         bp.slug AS slug,
         pricing.total AS total_cost,
+        pricing.distance_to_pu AS distance_to_pu,
         CAST(GREATEST((DATE_PART('year',now()) - COALESCE(bp.year_founded,DATE_PART('year',now()))),1) AS INTEGER) AS years_in_business
         FROM filtered_movers_with_pricing(move_plan_param,mover_param,select_from_temp) AS pricing
         JOIN movers ON movers.id = pricing.mover_id
@@ -1758,7 +1759,7 @@ FROM
         JOIN service_provider_ratings AS google ON google.service_provider_id = movers.id AND google.service_provider_type = 'Mover'AND google.reviewer = 'Google'
         JOIN service_provider_ratings AS unpakt ON unpakt.service_provider_id = movers.id AND unpakt.service_provider_type = 'Mover'AND unpakt.reviewer = 'Unpakt'
     ) as all_lines
-  ) as uniq WHERE uniq.rank = 1 ORDER BY total_cost ASC
+  ) as uniq WHERE uniq.rank = 1 ORDER BY distance_to_pu ASC
 );
 END
 $func$ LANGUAGE plpgsql;
