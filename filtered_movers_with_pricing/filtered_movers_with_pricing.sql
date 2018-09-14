@@ -1707,7 +1707,7 @@ RETURN QUERY
 FROM
 	(SELECT
 		*,
-		ROW_NUMBER() OVER(PARTITION BY all_lines.vendor_id ORDER BY all_lines.total_cost ASC) as rank
+		ROW_NUMBER() OVER(PARTITION BY all_lines.vendor_id ORDER BY all_lines.distance_to_pu ASC) as rank
 	FROM
 		(SELECT DISTINCT
         bp.id AS branch_property_id,
@@ -1759,7 +1759,7 @@ FROM
         JOIN service_provider_ratings AS google ON google.service_provider_id = movers.id AND google.service_provider_type = 'Mover'AND google.reviewer = 'Google'
         JOIN service_provider_ratings AS unpakt ON unpakt.service_provider_id = movers.id AND unpakt.service_provider_type = 'Mover'AND unpakt.reviewer = 'Unpakt'
     ) as all_lines
-  ) as uniq WHERE uniq.rank = 1 ORDER BY distance_to_pu ASC
+  ) as uniq WHERE uniq.rank = 1 ORDER BY total_cost ASC
 );
 END
 $func$ LANGUAGE plpgsql;
