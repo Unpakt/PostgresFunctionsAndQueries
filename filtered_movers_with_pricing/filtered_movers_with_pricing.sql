@@ -1590,27 +1590,29 @@ CREATE TEMP TABLE movers_and_pricing AS (
 
 IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 
-new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
-IF
-	(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both') > 0
-	AND for_bid = true
-	AND (SELECT count(*) FROM movers_and_pricing) = 1
-THEN
-	FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both' ORDER BY created_at ASC
-	LOOP
-		IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
-			UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * new_total) WHERE id = adj.id;
-			after_adj := after_adj + (adj.percentage * new_total)/100.00;
-			new_total := new_total + (adj.percentage * new_total)/100.00;
-		ELSE
-			after_adj := after_adj + adj.amount_in_cents/100.00;
-			new_total := new_total + adj.amount_in_cents/100.00;
-		END IF;
-		RAISE NOTICE 'after_adj = %', after_adj;
-	END LOOP;
-	UPDATE movers_and_pricing SET total = new_total;
-	UPDATE movers_and_pricing SET total_adjustments = before_adj + after_adj;
-END IF;
+	new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
+
+	IF
+		(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both') > 0
+		AND for_bid = true
+		AND (SELECT count(*) FROM movers_and_pricing) = 1
+	THEN
+		FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both' ORDER BY created_at ASC
+		LOOP
+			IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
+				UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * new_total) WHERE id = adj.id;
+				after_adj := after_adj + (adj.percentage * new_total)/100.00;
+				new_total := new_total + (adj.percentage * new_total)/100.00;
+			ELSE
+				after_adj := after_adj + adj.amount_in_cents/100.00;
+				new_total := new_total + adj.amount_in_cents/100.00;
+			END IF;
+			RAISE NOTICE 'after_adj = %', after_adj;
+		END LOOP;
+		UPDATE movers_and_pricing SET total = new_total;
+		UPDATE movers_and_pricing SET total_adjustments = before_adj + after_adj;
+	END IF;
+
 	IF (SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both') > 0 THEN
 		unpakt_fee_sub := new_total;
 		mover_cut_sub := new_total;
