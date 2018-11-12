@@ -1,5 +1,5 @@
 SELECT * FROM potential_movers('4451bb62-6e62-11e8-98af-95c136308632');
-SELECT * FROM filtered_movers_with_pricing('4956be4c-3ff9-11e8-9ea1-0f461a27ccab',null,false,true);
+SELECT * FROM filtered_movers_with_pricing('4956be4c-3ff9-11e8-9ea1-0f461a27ccab',null,FALSE ,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('4451bb62-6e62-11e8-98af-95c136308632');
@@ -57,7 +57,7 @@ RETURNS TABLE(
   mover_cut numeric, unpakt_fee numeric,
   coupon_discount numeric, mover_special_discount numeric,
   mover_special_percentage INTEGER,
-  twitter_discount numeric, facebook_discount numeric,
+  twitter_discount numeric, facebook_discount numeric, requested_discount numeric,
   subtotal numeric, adj_before numeric,
   moving_cost_adjusted numeric, travel_cost_adjusted numeric,
   recache_and_rerun boolean,
@@ -1514,6 +1514,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
 
   --TOTAL
     total.subtotal +
+    total.requested_discount +
     total.mover_special_discount +
     total.facebook_discount +
     total.twitter_discount +
@@ -1584,12 +1585,13 @@ CREATE TEMP TABLE movers_and_pricing AS (
       ELSE
           0
       END AS facebook_discount,
+      -200.67 as requested_discount,
       subtotal.*
     FROM movers_and_pricing_subtotal AS subtotal
     LEFT JOIN estimate_logs
       ON subtotal.mover_id = estimate_logs.mover_id
       AND mp_id = estimate_logs.move_plan_id
-      AND estimate_logs.reschedule_request_rejected = false
+      AND estimate_logs.discount_request_rejected = false
       AND estimate_logs.discount_amount < 0.00
 ) AS total);
 
