@@ -46,7 +46,7 @@ CREATE FUNCTION filtered_movers_with_pricing(
 	move_plan_param VARCHAR,
 	mover_param INTEGER[] DEFAULT NULL,
 	select_from_temp BOOLEAN DEFAULT false,
-	for_bid BOOLEAN DEFAULT false,
+	for_estimate BOOLEAN DEFAULT false,
 	reschedule_pc_id INTEGER DEFAULT NULL,
 	reschedule_time VARCHAR DEFAULT NULL,
 	reschedule_date DATE DEFAULT NULL,
@@ -124,7 +124,7 @@ DECLARE
     mp_id := (SELECT uuidable_id FROM uuids WHERE uuids.uuid = $1 AND uuidable_type = 'MovePlan');
     DROP TABLE IF EXISTS mp;
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
-    commission := (SELECT bid_commission_rate FROM mp);
+    commission := (SELECT estimate_commission_rate FROM mp);
     white_label_movers := (SELECT array_agg(white_label_whitelists.mover_id) FROM white_label_whitelists WHERE white_label_id = (SELECT white_label_id FROM mp));
     frozen_pc_id := COALESCE(
 	    reschedule_pc_id,
@@ -291,7 +291,7 @@ DECLARE
 	        AND (
 	            (marketplace_status = 'live' AND (movers.is_hidden = false OR movers.id = any(white_label_movers)))
             OR
-              for_bid = true)
+              for_estimate = true)
 	      JOIN (SELECT
 	              id as latest_pc_id,
 	              price_charts.mover_id AS pc_mover_id,
@@ -353,7 +353,7 @@ DECLARE
 	                pu_earth))
 
 	            --LESS THAN MAX CUBIC FEET
-	            AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_bid = true)
+	            AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_estimate = true)
 	          JOIN additional_services
 	            ON additional_services.price_chart_id = price_charts.id
 	          JOIN storage_details
@@ -397,7 +397,7 @@ DECLARE
 	                pu_earth))
 
 	            --LESS THAN MAX CUBIC FEET
-	            AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_bid = true)
+	            AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_estimate = true)
 	          JOIN additional_services
 	            ON additional_services.price_chart_id = price_charts.id
 	          JOIN storage_details
@@ -911,7 +911,7 @@ DECLARE
 	        ) AS availability
 	        WHERE
 	        CASE
-	          WHEN for_bid = TRUE THEN
+	          WHEN for_estimate = TRUE THEN
 	            1=1
 	          WHEN mov_time = 'am' THEN
 	            availability.net_am > 0
@@ -926,7 +926,7 @@ DECLARE
 	        END IF;
 
 	      --FILTER BY SIT AVAILABILITY
-	    IF sit_date IS NOT NULL AND for_bid = false THEN
+	    IF sit_date IS NOT NULL AND for_estimate = false THEN
 	      DELETE FROM movers_with_location_and_balancing_rate WHERE movers_with_location_and_balancing_rate.sit_avail <= 0;
 	    END IF;
 
@@ -1273,7 +1273,7 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
               END),
           2) AS travel_cost_adjusted,
 
-        --ADD RECACHE AND RERUN COLUMN FOR BID MODEL
+        --ADD RECACHE AND RERUN COLUMN FOR ESTIMATE MODEL
 						travel_plan_miles.recache_and_rerun as recache_and_rerun,
 
         --SPECIAL HANDLING COST ADJUSTED
@@ -1488,7 +1488,7 @@ FROM admin_adjustments WHERE planable_id = mp_id AND planable_type = 'MovePlan'
 
 IF
 	(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = true) > 0
-	AND for_bid = true
+	AND for_estimate = true
 	AND (SELECT count(*) FROM movers_and_pricing_subtotal) = 1
 THEN
 	new_sub := (SELECT movers_and_pricing_subtotal.subtotal FROM movers_and_pricing_subtotal LIMIT 1);
@@ -1586,15 +1586,20 @@ CREATE TEMP TABLE movers_and_pricing AS (
       END AS facebook_discount,
       subtotal.*
     FROM movers_and_pricing_subtotal AS subtotal
+    LEFT JOIN estimate_logs
+      ON subtotal.mover_id = estimate_logs.mover_id
+      AND mp_id = estimate_logs.move_plan_id
+      AND estimate_logs.reschedule_request_rejected = false
+      AND estimate_logs.discount_amount < 0.00
 ) AS total);
 
-IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
+IF for_estimate = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 
 	new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
 
 	IF
 		(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both') > 0
-		AND for_bid = true
+		AND for_estimate = true
 		AND (SELECT count(*) FROM movers_and_pricing) = 1
 	THEN
 		FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both' ORDER BY created_at ASC
@@ -1640,7 +1645,8 @@ IF for_bid = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 			RAISE NOTICE 'mover_adj = %', mover_cut_adj;
 			RAISE NOTICE 'unpakt_adj = %', unpakt_fee_adj;
 		END LOOP;
-	END IF;UPDATE movers_and_pricing SET
+	END IF;
+	UPDATE movers_and_pricing SET
 		total = mp.total + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
 	  total_adjustments = mp.total_adjustments + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
 	  mover_cut = (((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + COALESCE(mover_cut_adj,0.00)),
