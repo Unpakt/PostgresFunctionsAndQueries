@@ -1,13 +1,13 @@
 SELECT * FROM potential_movers('4451bb62-6e62-11e8-98af-95c136308632');
 SELECT * FROM filtered_movers_with_pricing('4956be4c-3ff9-11e8-9ea1-0f461a27ccab',null,FALSE ,true);
-SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71',null,true);
+SELECT * FROM estimate_logs;+
+SELECT * FROM filtered_movers_with_pricing('2cada20a-876a-4e3a-978f-24986758bdb6');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('4451bb62-6e62-11e8-98af-95c136308632');
 SELECT * FROM filtered_movers_with_pricing('b939368e-0527-11e8-3db1-0f461a27ccab','{752}',false,true);
 SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
 SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
-SELECT * FROM comparison_presenter_v4('0d2a1d64-9743-11e8-1589-31e027a6f5f1',null,true);
-
+SELECT * FROM comparison_presenter_v4('2cada20a-876a-4e3a-978f-24986758bdb6',null,true);
 
 DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
 CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
@@ -1585,7 +1585,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
       ELSE
           0
       END AS facebook_discount,
-      -200.67 as requested_discount,
+      CAST(COALESCE(discount_amount,0.00) AS NUMERIC) AS requested_discount,
       subtotal.*
     FROM movers_and_pricing_subtotal AS subtotal
     LEFT JOIN estimate_logs
@@ -1593,6 +1593,7 @@ CREATE TEMP TABLE movers_and_pricing AS (
       AND mp_id = estimate_logs.move_plan_id
       AND estimate_logs.discount_request_rejected = false
       AND estimate_logs.discount_amount < 0.00
+      AND estimate_logs.discount_amount IS NOT NULL
 ) AS total);
 
 IF for_estimate = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
@@ -1700,6 +1701,7 @@ CREATE FUNCTION comparison_presenter_v4(move_plan_param VARCHAR, mover_param INT
   yelp_rounded_rating numeric,
   slug varchar,
   total_cost numeric,
+  requested_discoun numeric,
   years_in_business integer
   ) AS
 $func$
@@ -1713,7 +1715,7 @@ RETURN QUERY
 	uniq.storage_cost, uniq.profile_path, uniq.google_link, uniq.google_number_of_reviews,
 	uniq.google_rating, uniq.google_rounded_rating, uniq.unpakt_link, uniq.unpakt_number_of_reviews,
 	uniq.unpakt_rating, uniq.unpakt_rounded_rating, uniq.yelp_link, uniq.yelp_number_of_reviews,
-	uniq.yelp_rating, uniq.yelp_rounded_rating, uniq.slug, uniq.total_cost, uniq.years_in_business
+	uniq.yelp_rating, uniq.yelp_rounded_rating, uniq.slug, uniq.total_cost, uniq.requested_discount, uniq.years_in_business
 FROM
 	(SELECT
 		*,
@@ -1759,6 +1761,7 @@ FROM
         ROUND(ROUND(CAST(yelp.rating AS numeric) * 2.00)/2,1) AS yelp_rounded_rating,
         bp.slug AS slug,
         pricing.total AS total_cost,
+        pricing.requested_discount AS requested_discount,
         pricing.distance_to_pu AS distance_to_pu,
         CAST(GREATEST((DATE_PART('year',now()) - COALESCE(bp.year_founded,DATE_PART('year',now()))),1) AS INTEGER) AS years_in_business
         FROM filtered_movers_with_pricing(move_plan_param,mover_param,select_from_temp) AS pricing
