@@ -1,0 +1,32 @@
+SELECT count(*),mover_state,paid, round(sum(total),2) AS total_cost,round(sum(mover_cut),2) AS mover_cut,(max(booked_date)),(min(booked_date)) FROM
+(
+	SELECT
+		CASE
+			WHEN mover_state = 'completed' THEN 'BOL Verified'
+			WHEN mover_state = 'bol_submitted' THEN 'BOL Submitted'
+			ELSE 'BOL Pending, Job Completed'
+		END AS mover_state,
+		estimates.total,
+		estimates.total * (1.00-(move_plans.estimate_commission_rate/100.00)) AS mover_cut,
+		CASE
+			WHEN payment_entries.chargeable_id IS NOT NULL THEN TRUE
+			ELSE FALSE
+		END AS paid,
+		jobs.created_at as booked_date
+	FROM jobs
+	JOIN estimates
+		ON estimates.move_plan_id = jobs.move_plan_id
+		AND jobs.mover_state NOT IN ('declined','cancelled_pending','cancelled_acknowledged')
+		AND jobs.user_state NOT IN ('reserved','reserved_cancelled')
+		AND jobs.created_at >= '1/1/2016'
+	LEFT JOIN (SELECT distinct chargeable_id, chargeable_type FROM payment_entries WHERE payment_id IS NOT NULL AND kind = 'Job') as payment_entries
+		ON payment_entries.chargeable_type = 'MovePlan'
+		AND payment_entries.chargeable_id = jobs.move_plan_id
+	JOIN move_plans
+		ON jobs.move_plan_id = move_plans.id
+		AND move_plans.move_date < now()::DATE
+) as all_jobs
+GROUP BY mover_state,paid
+;
+
+SELECT COUNT(*) from move_plans;

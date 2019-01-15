@@ -1,6 +1,6 @@
 SELECT * FROM potential_movers('4451bb62-6e62-11e8-98af-95c136308632');
 SELECT * FROM filtered_movers_with_pricing('4956be4c-3ff9-11e8-9ea1-0f461a27ccab',null,FALSE ,true);
-SELECT * FROM estimate_logs;+
+SELECT * FROM estimate_logs;
 SELECT * FROM filtered_movers_with_pricing('2cada20a-876a-4e3a-978f-24986758bdb6');
 SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
 SELECT * FROM filtered_movers_with_pricing('4451bb62-6e62-11e8-98af-95c136308632');
@@ -1702,26 +1702,37 @@ CREATE FUNCTION comparison_presenter_v4(move_plan_param VARCHAR, mover_param INT
   slug varchar,
   total_cost numeric,
   requested_discoun numeric,
-  years_in_business integer
+  years_in_business integer,
+  estimate_moving numeric,
+  estimate_travel numeric,
+  estimate_special_handling numeric,
+  estimate_storage numeric,
+  estimate_cardboard numeric,
+  estimate_surcharge_cubic_feet numeric,
+  estimate_coi_charges numeric,
+  estimate_size_surcharge numeric,
+  estimate_long_distance boolean
   ) AS
 $func$
 BEGIN
 RETURN QUERY
 (SELECT
-	uniq.branch_property_id, uniq.city_state_label, uniq.consult_only, uniq.dedicated,
-	uniq.maximum_delivery_days, uniq.minimum_delivery_days,	uniq.grade, uniq.id,
-	uniq.is_featured, uniq.logo_url, uniq.mover_special, uniq.mover_special_percentage, uniq.name, uniq.number_of_employees,
-	uniq.number_of_trucks, uniq.moving, uniq.packing_cost, uniq.special_handling_cost,
-	uniq.storage_cost, uniq.profile_path, uniq.google_link, uniq.google_number_of_reviews,
-	uniq.google_rating, uniq.google_rounded_rating, uniq.unpakt_link, uniq.unpakt_number_of_reviews,
-	uniq.unpakt_rating, uniq.unpakt_rounded_rating, uniq.yelp_link, uniq.yelp_number_of_reviews,
-	uniq.yelp_rating, uniq.yelp_rounded_rating, uniq.slug, uniq.total_cost, uniq.requested_discount, uniq.years_in_business
+  uniq.branch_property_id, uniq.city_state_label, uniq.consult_only, uniq.dedicated,
+  uniq.maximum_delivery_days, uniq.minimum_delivery_days,	uniq.grade, uniq.id,
+  uniq.is_featured, uniq.logo_url, uniq.mover_special, uniq.mover_special_percentage, uniq.name, uniq.number_of_employees,
+  uniq.number_of_trucks, uniq.moving, uniq.packing_cost, uniq.special_handling_cost,
+  uniq.storage_cost, uniq.profile_path, uniq.google_link, uniq.google_number_of_reviews,
+  uniq.google_rating, uniq.google_rounded_rating, uniq.unpakt_link, uniq.unpakt_number_of_reviews,
+  uniq.unpakt_rating, uniq.unpakt_rounded_rating, uniq.yelp_link, uniq.yelp_number_of_reviews,
+  uniq.yelp_rating, uniq.yelp_rounded_rating, uniq.slug, uniq.total_cost, uniq.requested_discount, uniq.years_in_business,
+  uniq.estimate_moving, uniq.estimate_travel, uniq.estimate_special_handling, uniq.estimate_storage,uniq.estimate_cardboard,
+  uniq.estimate_surcharge_cubic_feet, uniq.estimate_coi_charges, uniq.estimate_size_surcharge, uniq.estimate_long_distance
 FROM
-	(SELECT
-		*,
-		ROW_NUMBER() OVER(PARTITION BY all_lines.vendor_id ORDER BY all_lines.distance_to_pu ASC) as rank
-	FROM
-		(SELECT DISTINCT
+  (SELECT
+    *,
+    ROW_NUMBER() OVER(PARTITION BY all_lines.vendor_id ORDER BY all_lines.distance_to_pu ASC) as rank
+  FROM
+    (SELECT DISTINCT
         bp.id AS branch_property_id,
         CAST(ba.city || ', ' || ba.state AS VARCHAR) AS city_state_label,
         (CASE WHEN pricing.location_type = 'local' THEN
@@ -1763,7 +1774,19 @@ FROM
         pricing.total AS total_cost,
         pricing.requested_discount AS requested_discount,
         pricing.distance_to_pu AS distance_to_pu,
-        CAST(GREATEST((DATE_PART('year',now()) - COALESCE(bp.year_founded,DATE_PART('year',now()))),1) AS INTEGER) AS years_in_business
+        CAST(GREATEST((DATE_PART('year',now()) - COALESCE(bp.year_founded,DATE_PART('year',now()))),1) AS INTEGER) AS years_in_business,
+        pricing.moving_cost_adjusted AS estimate_moving,
+        pricing.travel_cost_adjusted AS estimate_travel,
+        pricing.special_handling_cost_adjusted as estimate_special_handling,
+        pricing.storage_cost AS estimate_storage,
+        pricing.cardboard_cost_adjusted AS estimate_cardboard,
+        pricing.surcharge_cubic_feet_cost_adjusted AS estimate_surcharge_cubic_feet,
+        pricing.coi_charges_cost AS estimate_coi_charges,
+        pricing.size_surcharge_cost_adjusted AS estimate_size_surcharge,
+        case pricing.location_type
+          WHEN 'local' THEN false
+          else TRUE
+        END as estimate_long_distance
         FROM filtered_movers_with_pricing(move_plan_param,mover_param,select_from_temp) AS pricing
         JOIN movers ON movers.id = pricing.mover_id
         JOIN branch_properties AS bp ON bp.branchable_id = movers.id AND branchable_type = 'Mover'
