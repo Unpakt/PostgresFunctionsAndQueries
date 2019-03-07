@@ -36,3 +36,26 @@ SELECT count(distinct(move_plan_id)) FROM estimate_logs where discount_requested
 
 
 SELECT * FROM inventory_items WHERE is_user_generated = TRUE ORDER BY name;
+
+SELECT count(*), provider  FROM users WHERE created_at > '2018-6-1' GROUP BY provider;
+
+SELECT * FROM users limit 1;
+
+SELECT * FROM move_plans left join (SELECT distinct move_plan_id as job_move_plan from jobs) as jobs ON job_move_plan = move_plans.id where job_move_plan is null;
+
+SELECT source, count(*) FROM move_plans group by source order by count DESC;
+
+SELECT distinct yelp_opportunity_token, yelp_order_id FROM move_plans;
+
+SELECT count(*), country from addresses group by country;
+
+UPDATE addresses set country = 'US' where country = '' OR country is null;
+SELECT distinct country FROM (SELECT country FROM addresses order by created_at desc LIMIT 10000) as k;
+SELECT * FROm cubic_feet_tier_long_distances;
+SELECT * FROM jobs LIMIT 1;
+SELECT * FROm mover_specials limit 1;
+SELECT * FROm price_charts LIMIT 1;
+
+
+SELECT * FROM move_plans
+JOIN jobs on jobs.move_plan_id = move_plans.id and move_date = '2019-01-11';
