@@ -1,38 +1,3 @@
-SELECT * FROM potential_movers('4451bb62-6e62-11e8-98af-95c136308632');
-SELECT * FROM filtered_movers_with_pricing('4956be4c-3ff9-11e8-9ea1-0f461a27ccab',null,FALSE ,true);
-SELECT * FROM estimate_logs;
-SELECT * FROM filtered_movers_with_pricing('2cada20a-876a-4e3a-978f-24986758bdb6');
-SELECT * FROM filtered_movers_with_pricing('fe884282-547a-11e8-89ac-016ea2b9fd71','{894,1661,371,2658,2118,15,679}');
-SELECT * FROM filtered_movers_with_pricing('4451bb62-6e62-11e8-98af-95c136308632');
-SELECT * FROM filtered_movers_with_pricing('b939368e-0527-11e8-3db1-0f461a27ccab','{752}',false,true);
-SELECT * FROM potential_movers('fe884282-547a-11e8-89ac-016ea2b9fd71');
-SELECT * FROM distance_in_miles('"65658 Broadway", New York, NY, 10012','11377');
-SELECT * FROM comparison_presenter_v4('2cada20a-876a-4e3a-978f-24986758bdb6',null,true);
-
-DROP FUNCTION IF EXISTS distance_in_miles(VARCHAR, VARCHAR);
-CREATE FUNCTION distance_in_miles(pick_up VARCHAR, drop_off VARCHAR)
-  RETURNS numeric AS
-$func$
-BEGIN
-RETURN
-CASE WHEN pick_up = drop_off THEN
-	0.00
-ELSE
-	COALESCE(
-  (SELECT distance_in_miles
-  FROM driving_distances
-  WHERE (pick_up_hash = pick_up AND drop_off_hash = drop_off)
-  ORDER BY created_at DESC
-  LIMIT 1),
-  (SELECT distance_in_miles
-  FROM driving_distances
-  WHERE (pick_up_hash = drop_off AND drop_off_hash = pick_up)
-  ORDER BY created_at DESC
-  LIMIT 1))
-END;
-END
-$func$ LANGUAGE plpgsql;
-
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN);
@@ -41,17 +6,19 @@ DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE);
 DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE,DATE);
+DROP FUNCTION IF EXISTS filtered_movers_with_pricing(VARCHAR, INTEGER[], BOOLEAN, BOOLEAN, INTEGER,VARCHAR,DATE,DATE,DATE,BOOLEAN);
 
 CREATE FUNCTION filtered_movers_with_pricing(
-	move_plan_param VARCHAR,
-	mover_param INTEGER[] DEFAULT NULL,
-	select_from_temp BOOLEAN DEFAULT false,
-	for_estimate BOOLEAN DEFAULT false,
-	reschedule_pc_id INTEGER DEFAULT NULL,
-	reschedule_time VARCHAR DEFAULT NULL,
-	reschedule_date DATE DEFAULT NULL,
-	reschedule_sit_date DATE DEFAULT NULL,
-	reschedule_box_date DATE DEFAULT NULL)
+  move_plan_param VARCHAR,
+  mover_param INTEGER[] DEFAULT NULL,
+  select_from_temp BOOLEAN DEFAULT false,
+  for_estimate BOOLEAN DEFAULT false,
+  reschedule_pc_id INTEGER DEFAULT NULL,
+  reschedule_time VARCHAR DEFAULT NULL,
+  reschedule_date DATE DEFAULT NULL,
+  reschedule_sit_date DATE DEFAULT NULL,
+  reschedule_box_date DATE DEFAULT NULL,
+  mda_price BOOLEAN DEFAULT false)
 RETURNS TABLE(
   total numeric, total_adjustments numeric,
   mover_cut numeric, unpakt_fee numeric,
@@ -94,7 +61,7 @@ DECLARE num_carpentry integer;DECLARE num_crating integer;
 DECLARE box_dow integer;DECLARE box_date date;DECLARE box_cubic_feet numeric;
 DECLARE frozen_pc_id integer; DECLARE frozen_mover_id integer;
 DECLARE frozen_mover_latest_pc_id integer; DECLARE white_label_movers int[];
-DECLARE commission numeric;
+DECLARE commission numeric; DECLARE booked_date date;
 
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
@@ -116,20 +83,30 @@ DECLARE unpakt_fee_adj NUMERIC;
 --DEFINE VARIABLES FOR DISTANCE LOOP
 DECLARE tp RECORD;
 
+--DEFINE VARIABLES FOR MDA LOOP
+DECLARE mda_add_ii RECORD;
+DECLARE mda_sub_ii RECORD;
+DECLARE mda_add_bi RECORD;
+DECLARE mda_sub_bi RECORD;
+DECLARE mda_add_ci RECORD;
+DECLARE mda_sub_ci RECORD;
+DECLARE num_added   INT;
+DECLARE num_removed INT;
+
 
 DECLARE
   BEGIN
-
     --SET GENERAL VARIABLES
     mp_id := (SELECT uuidable_id FROM uuids WHERE uuids.uuid = $1 AND uuidable_type = 'MovePlan');
     DROP TABLE IF EXISTS mp;
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     commission := (SELECT estimate_commission_rate FROM mp);
+    booked_date := (SELECT jobs.created_at FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1);
     white_label_movers := (SELECT array_agg(white_label_whitelists.mover_id) FROM white_label_whitelists WHERE white_label_id = (SELECT white_label_id FROM mp));
     frozen_pc_id := COALESCE(
-	    reschedule_pc_id,
-	    (SELECT jobs.price_chart_id FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1),
-	    (SELECT frozen_price_chart_id FROM mp));
+      reschedule_pc_id,
+      (SELECT jobs.price_chart_id FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1),
+      (SELECT frozen_price_chart_id FROM mp));
     frozen_mover_id := (SELECT price_charts.mover_id FROM price_charts WHERE price_charts.id = frozen_pc_id);
     frozen_mover_latest_pc_id := (SELECT price_charts.id FROM price_charts WHERE price_charts.mover_id = frozen_mover_id ORDER BY created_at DESC LIMIT 1);
     IF reschedule_date IS NOT NULL THEN
@@ -143,11 +120,11 @@ DECLARE
     END IF;
     IF reschedule_box_date IS NOT NULL THEN
       IF reschedule_box_date = '11/11/1111' THEN
-				UPDATE mp SET box_delivery_date = NULL;
-			ELSE
-				UPDATE mp SET box_delivery_date = reschedule_box_date;
-			END IF;
-		END IF;
+        UPDATE mp SET box_delivery_date = NULL;
+      ELSE
+        UPDATE mp SET box_delivery_date = reschedule_box_date;
+      END IF;
+    END IF;
     mov_date := (SELECT move_date FROM mp);
     mov_time := (SELECT CASE WHEN mp.move_time LIKE '%PM%' THEN 'pm' ELSE 'am' END FROM mp);
     sit_date := (SELECT storage_move_out_date FROM mp);
@@ -156,93 +133,180 @@ DECLARE
     mp_coupon_id := (SELECT coupon_id FROM jobs WHERE id = COALESCE(
           (SELECT id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state <> 'cancelled' AND mover_state <> 'declined' ORDER BY jobs.id LIMIT 1),
           (SELECT id FROM jobs WHERE jobs.move_plan_id = mp_id AND user_state = 'cancelled' ORDER BY jobs.id DESC LIMIT 1)));
-		before_adj := 0.00;
-		after_adj := 0.00;
-		unpakt_fee_sub := 0.00;
-		mover_cut_sub := 0.00;
-		unpakt_fee_adj := 0.00;
-		mover_cut_adj := 0.00;
-	    --FIND MOVE PLAN INVENTORY ITEMS
-	    DROP TABLE IF EXISTS mp_ii;
-	    CREATE TEMP TABLE mp_ii AS (
-	      SELECT
-	        move_plan_inventory_items.id as mpii_id,
-	        move_plan_id, inventory_item_id, item_group_id,
-	        assembly_required, wall_removal_required, crating_required, is_user_selected, requires_piano_services,
-	        inventory_items.name as item_name, icon_css_class, cubic_feet, is_user_generated, description
-	      FROM move_plan_inventory_items
-	      JOIN inventory_items
-	      ON move_plan_inventory_items.inventory_item_id = inventory_items.id
-	      AND move_plan_id = mp_id);
+    before_adj := 0.00;
+    after_adj := 0.00;
+    unpakt_fee_sub := 0.00;
+    mover_cut_sub := 0.00;
+    unpakt_fee_adj := 0.00;
+    mover_cut_adj := 0.00;
+      --FIND MOVE PLAN INVENTORY ITEMS
+      DROP TABLE IF EXISTS mp_ii;
+      CREATE TEMP TABLE mp_ii AS (
+        SELECT
+          move_plan_inventory_items.id as mpii_id,
+          move_plan_id, inventory_item_id, item_group_id,
+          assembly_required, wall_removal_required, crating_required, is_user_selected, requires_piano_services,
+          inventory_items.name as item_name, icon_css_class, cubic_feet, is_user_generated, description
+        FROM move_plan_inventory_items
+        JOIN inventory_items
+        ON move_plan_inventory_items.inventory_item_id = inventory_items.id
+        AND move_plan_id = mp_id);
 
-	    --FIND MOVE PLAN BOX ITEMS
-	    DROP TABLE IF EXISTS mp_bi;
-	    CREATE TEMP TABLE mp_bi AS (
-	      SELECT
-	        mpbi.id as mpbi_id,
-	        move_plan_id, box_type_id, quantity,
-	        cubic_feet
-	      FROM box_inventories as mpbi
-	      JOIN box_types AS bt
-	      ON mpbi.move_plan_id = mp_id
-	      AND mpbi.box_type_id = bt.id);
+      --FIND MOVE PLAN BOX ITEMS
+      DROP TABLE IF EXISTS mp_bi;
+      CREATE TEMP TABLE mp_bi AS (
+        SELECT
+          mpbi.id as mpbi_id,
+          move_plan_id, box_type_id, quantity,
+          cubic_feet
+        FROM box_inventories as mpbi
+        JOIN box_types AS bt
+        ON mpbi.move_plan_id = mp_id
+        AND mpbi.box_type_id = bt.id);
 
-	    --FIND MOVE PLAN BOX ITEMS
-	    DROP TABLE IF EXISTS mp_bp;
-	    CREATE TEMP TABLE mp_bp AS (
-	      SELECT
-	        mpbp.id as mpbp_id,
-	        move_plan_id, box_type_id, quantity,
-	        cubic_feet
-	      FROM box_purchases as mpbp
-	      JOIN box_types AS bt
-	      ON mpbp.move_plan_id = mp_id
-	      AND mpbp.box_type_id = bt.id
-	      AND quantity > 0);
+      --FIND MOVE PLAN BOX ITEMS
+      DROP TABLE IF EXISTS mp_bp;
+      CREATE TEMP TABLE mp_bp AS (
+        SELECT
+          mpbp.id as mpbp_id,
+          move_plan_id, box_type_id, quantity,
+          cubic_feet
+        FROM box_purchases as mpbp
+        JOIN box_types AS bt
+        ON mpbp.move_plan_id = mp_id
+        AND mpbp.box_type_id = bt.id
+        AND quantity > 0);
 
-	    --FIND CRATING ITEMS CUBIC FEET
-	    DROP TABLE IF EXISTS crating_item_cubic_feet;
-	    CREATE TEMP TABLE crating_item_cubic_feet AS(
-	      SELECT COALESCE(cubic_feet,0) as cubic_feet
-	      FROM mp_ii WHERE crating_required = true
-	    );
+			--MDA ESTIMATE
+			IF mda_price = true THEN
 
-	    --FIND TOTAL ITEM CUBIC FEET
-	    item_cubic_feet := (SELECT COALESCE(SUM(cubic_feet),0) FROM mp_ii);
+				--MDA ITEMS
+        DROP TABLE IF EXISTS mda_ii;
+        CREATE TEMP TABLE mda_ii AS (
+        SELECT
+					*
+				FROM jsonb_to_recordset((SELECT item_json FROM move_day_adjustments LIMIT 1))
+				AS json(item_id int, group_id int, amount_changed int)
+				JOIN inventory_items
+				ON item_id = inventory_items.id);
 
-	    --FIND TOTAL BOX CUBIC FEET
-	    box_cubic_feet := (SELECT COALESCE((
-	      SELECT SUM(COALESCE(cubic_feet * quantity,0))
-	      FROM mp_bi
-	      GROUP BY mp_bi.move_plan_id),0));
+				--MDA BOXES
+				DROP TABLE IF EXISTS mda_bi;
+				CREATE TEMP TABLE mda_bi AS (
+				SELECT
+					*
+				FROM jsonb_to_recordset((SELECT box_json FROM move_day_adjustments LIMIT 1))
+				AS json(box_type_id int, amount_changed int)
+				JOIN box_types
+				ON box_type_id = box_types.id);
 
-	    --FIND TOTAL CUBIC FEET
-	    total_cubic_feet := (SELECT box_cubic_feet + item_cubic_feet);
+				--MDA CUSTOM ITEMS
+				DROP TABLE IF EXISTS mda_ci;
+				CREATE TEMP TABLE mda_ci AS (
+				SELECT
+					json.*,
+					1 as item_group_id,
+					inventory_items.*
+				FROM jsonb_to_recordset((SELECT custom_json FROM move_day_adjustments LIMIT 1))
+				AS json(new_id text, length int, new_name text, width int, height int ,new_cubic_feet numeric, new_description text, amount_changed int)
+				LEFT JOIN inventory_items
+				ON json.new_id::text = inventory_items.id::text);
 
-	    --FIND NUMBER OF CRATING ITEMS
-	    num_crating := (SELECT COALESCE(count(*),0) FROM crating_item_cubic_feet);
+				FOR mda_add_ii in SELECT * FROM mda_ii where amount_changed > 0
+				LOOP
+					num_added := 0;
+					WHILE num_added < mda_add_ii.amount_changed LOOP
+						num_added := num_added + 1;
+						INSERT INTO mp_ii SELECT
+							mda_add_ii.item_id as mpii_id,
+							(SELECT id FROM mp) AS move_plan_id,
+							mda_add_ii.item_id as inventory_item_id,
+							mda_add_ii.group_id as item_group_id,
+							false as assembly_required,
+							false as wall_removal_required,
+							false as crating_required,
+							true as is_user_selected,
+							false as requires_piano_services,
+              mda_add_ii.name as item_name,
+              mda_add_ii.icon_css_class,
+              mda_add_ii.cubic_feet,
+              mda_add_ii.is_user_generated,
+              mda_add_ii.description;
+					END LOOP;
+				END LOOP;
 
-	    --FIND NUMBER OF 'CARPENTRY' ITEMS
-	    num_carpentry := (SELECT COALESCE(count(*),0) FROM mp_ii WHERE wall_removal_required = true OR assembly_required = true);
+				FOR mda_sub_ii in SELECT * FROM mda_ii where amount_changed < 0
+				LOOP
+					num_removed := 0;
+					WHILE num_removed > mda_sub_ii.amount_changed LOOP
+						num_removed := num_removed - 1;
+						DELETE from mp_ii
+						WHERE mpii_id = (
+							SELECT mpii_id
+							WHERE inventory_item_id = mda_sub_ii.item_id
+							AND item_group_id = mda_sub_ii.group_id
+							ORDER BY mpii_id DESC LIMIT 1
+							);
+					END LOOP;
+				END LOOP;
 
-	    --SET ADDRESS VARIABLES USING THIS STUPID METHOD BECAUSE THE RAILS DEVELOPERS CAN'T READ THE POSTGRES DOCUMENTATION
-	    --https://www.postgresql.org/docs/current/static/sql-select.html Description #8
-	    DROP TABLE IF EXISTS mp_addresses;
-	    CREATE TEMP TABLE mp_addresses AS
-	      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'pick_up' LIMIT 1) UNION ALL
-	      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_pick_up' LIMIT 1) UNION ALL
-	      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'drop_off' LIMIT 1) UNION ALL
-	      (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_drop_off' LIMIT 1);
+-- 							SELECT * FROM mda_ii where amount_changed < 0;
+-- 							SELECT * FROM mda_bi WHERE amount_changed > 0;
+-- 							SELECT * FROM mda_bi WHERE amount_changed < 0;
+-- 							SELECT * FROM mda_ci WHERE amount_changed > 0;
+-- 							SELECT * FROM mda_ci WHERE amount_changed < 0;
 
-	    --HANDLE WAREHOSUE DESTINATIONS
-	    IF (SELECT warehouse_destination FROM mp) = TRUE THEN
-	      DELETE FROM mp_addresses WHERE role_in_plan = 'drop_off';
-	      DELETE FROM mp_addresses WHERE role_in_plan = 'extra_drop_off';
-	    END IF;
+			END IF;
 
-	    --SET ADDRESS VARIABLES
+      --FIND CRATING ITEMS CUBIC FEET
+      DROP TABLE IF EXISTS crating_item_cubic_feet;
+      CREATE TEMP TABLE crating_item_cubic_feet AS(
+        SELECT COALESCE(cubic_feet,0) as cubic_feet
+        FROM mp_ii WHERE crating_required = true
+      );
+
+      --FIND TOTAL ITEM CUBIC FEET
+      item_cubic_feet := (SELECT COALESCE(SUM(cubic_feet),0) FROM mp_ii);
+
+      --FIND TOTAL BOX CUBIC FEET
+      box_cubic_feet := (SELECT COALESCE((
+        SELECT SUM(COALESCE(cubic_feet * quantity,0))
+        FROM mp_bi
+        GROUP BY mp_bi.move_plan_id),0));
+
+      --FIND TOTAL CUBIC FEET
+      total_cubic_feet := (SELECT box_cubic_feet + item_cubic_feet);
+
+      --FIND NUMBER OF CRATING ITEMS
+      num_crating := (SELECT COALESCE(count(*),0) FROM crating_item_cubic_feet);
+
+      --FIND NUMBER OF 'CARPENTRY' ITEMS
+      num_carpentry := (SELECT COALESCE(count(*),0) FROM mp_ii WHERE wall_removal_required = true OR assembly_required = true);
+
+      --SET ADDRESS VARIABLES USING THIS STUPID METHOD BECAUSE THE RAILS DEVELOPERS CAN'T READ THE POSTGRES DOCUMENTATION
+      --https://www.postgresql.org/docs/current/static/sql-select.html Description #8
+      DROP TABLE IF EXISTS mp_addresses;
+      CREATE TEMP TABLE mp_addresses AS
+        (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'pick_up' LIMIT 1) UNION ALL
+        (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_pick_up' LIMIT 1) UNION ALL
+        (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'drop_off' LIMIT 1) UNION ALL
+        (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_drop_off' LIMIT 1);
+
+      --HANDLE WAREHOSUE DESTINATIONS
+      IF (SELECT warehouse_destination FROM mp) = TRUE THEN
+        DELETE FROM mp_addresses WHERE role_in_plan = 'drop_off';
+        DELETE FROM mp_addresses WHERE role_in_plan = 'extra_drop_off';
+      END IF;
+
+      --SET ADDRESS VARIABLES
     num_stairs := (
-      SELECT sum(flights_of_stairs) FROM (
+      SELECT
+        CASE WHEN booked_date::DATE IS NULL OR booked_date::DATE > '2019-05-15' THEN
+          greatest(0,(sum(flights_of_stairs) - 1))
+        ELSE
+          greatest(0,(sum(flights_of_stairs)))
+        END
+      FROM (
         SELECT
           heights.flights_of_stairs
         FROM mp_addresses
@@ -250,62 +314,62 @@ DECLARE
           ON mp_addresses.height_id = heights.id
           AND mp_addresses.move_plan_id = mp_id
           AND mp_addresses.role_in_plan IN ('drop_off', 'pick_up') ) as stairs);
-	    pu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'pick_up');
-	    epu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
-	    do_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'drop_off');
-	    edo_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_drop_off');
-	    pu_earth := (SELECT * FROM ll_to_earth(
-	        (SELECT latitude FROM mp_addresses where role_in_plan = 'pick_up'),
-	        (SELECT longitude FROM mp_addresses where role_in_plan = 'pick_up')));
-	    epu_earth := (SELECT * FROM ll_to_earth(
-	        (SELECT latitude FROM mp_addresses where role_in_plan = 'extra_pick_up'),
-	        (SELECT longitude FROM mp_addresses where role_in_plan = 'extra_pick_up')));
-	    do_earth := (SELECT * FROM ll_to_earth(
-	        (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'drop_off'),
-	        (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'drop_off')));
-	    edo_earth := (SELECT * FROM ll_to_earth(
-	        (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'),
-	        (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off')));
-	    pu_key  := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'pick_up');
-	    epu_key := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
-	    do_key  := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'drop_off');
-	    edo_key := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'extra_drop_off');
+      pu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'pick_up');
+      epu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
+      do_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'drop_off');
+      edo_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_drop_off');
+      pu_earth := (SELECT * FROM ll_to_earth(
+          (SELECT latitude FROM mp_addresses where role_in_plan = 'pick_up'),
+          (SELECT longitude FROM mp_addresses where role_in_plan = 'pick_up')));
+      epu_earth := (SELECT * FROM ll_to_earth(
+          (SELECT latitude FROM mp_addresses where role_in_plan = 'extra_pick_up'),
+          (SELECT longitude FROM mp_addresses where role_in_plan = 'extra_pick_up')));
+      do_earth := (SELECT * FROM ll_to_earth(
+          (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'drop_off'),
+          (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'drop_off')));
+      edo_earth := (SELECT * FROM ll_to_earth(
+          (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'),
+          (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'extra_drop_off')));
+      pu_key  := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'pick_up');
+      epu_key := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
+      do_key  := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'drop_off');
+      edo_key := (SELECT distance_cache_key FROM mp_addresses WHERE role_in_plan = 'extra_drop_off');
 
 
-		IF select_from_temp = false THEN
-	    --FIND LIVE MOVERS
-	    DROP TABLE IF EXISTS potential_movers;
-	    CREATE TEMP TABLE potential_movers AS SELECT
-	        COALESCE(branch_properties.trade_name, branch_properties.name) as mover_name,
-	        movers.id,
+    IF select_from_temp = false THEN
+      --FIND LIVE MOVERS
+      DROP TABLE IF EXISTS potential_movers;
+      CREATE TEMP TABLE potential_movers AS SELECT
+          COALESCE(branch_properties.trade_name, branch_properties.name) as mover_name,
+          movers.id,
           latest_pc.latest_pc_id,
-	        movers.local_consult_only,
-	        movers.interstate_consult_only
-	      FROM movers
-	      JOIN branch_properties
-	        ON branchable_id = movers.id
-	        AND branchable_type = 'Mover'
-	        AND (CASE WHEN mover_param IS NOT NULL THEN
-	             movers.id = any(mover_param)
-	            ELSE 1=1 END)
-	        AND (
-	            (marketplace_status = 'live' AND (movers.is_hidden = false OR movers.id = any(white_label_movers)))
+          movers.local_consult_only,
+          movers.interstate_consult_only
+        FROM movers
+        JOIN branch_properties
+          ON branchable_id = movers.id
+          AND branchable_type = 'Mover'
+          AND (CASE WHEN mover_param IS NOT NULL THEN
+               movers.id = any(mover_param)
+              ELSE 1=1 END)
+          AND (
+              (marketplace_status = 'live' AND (movers.is_hidden = false OR movers.id = any(white_label_movers)))
             OR
               for_estimate = true)
-	      JOIN (SELECT
-	              id as latest_pc_id,
-	              price_charts.mover_id AS pc_mover_id,
-	              rank() OVER(
-	                PARTITION BY price_charts.mover_id
-	                ORDER BY created_at DESC) as rank
-	            FROM public.price_charts) as latest_pc
-	        ON pc_mover_id = movers.id
-	        AND
-		        CASE WHEN frozen_mover_id IS NULL THEN
-		          latest_pc.rank = 1
-		          ELSE
-		          ((latest_pc.rank = 1 AND latest_pc.pc_mover_id <> frozen_mover_id) OR latest_pc.latest_pc_id = frozen_pc_id)
-	          END;
+        JOIN (SELECT
+                id as latest_pc_id,
+                price_charts.mover_id AS pc_mover_id,
+                rank() OVER(
+                  PARTITION BY price_charts.mover_id
+                  ORDER BY created_at DESC) as rank
+              FROM public.price_charts) as latest_pc
+          ON pc_mover_id = movers.id
+          AND
+            CASE WHEN frozen_mover_id IS NULL THEN
+              latest_pc.rank = 1
+              ELSE
+              ((latest_pc.rank = 1 AND latest_pc.pc_mover_id <> frozen_mover_id) OR latest_pc.latest_pc_id = frozen_pc_id)
+            END;
 
       --RAISE NO MOVER FOUND ERROR
       IF (SELECT COUNT(*) FROM potential_movers) = 0 THEN
@@ -314,627 +378,627 @@ DECLARE
 
 
 
-	    --FILTER BY HAUL TYPE, PICK UP DISTANCE, INTRA/INTER(STATE) CERTIFICATION, MAX CUBIC FEET, MINIMUM DISTANCE
-	    DROP TABLE IF EXISTS movers_by_haul;
-	    CREATE TEMP TABLE movers_by_haul (mover_name varchar, mover_id integer, pick_up_mileage numeric, drop_off_mileage numeric,
-	    extra_stop_enabled boolean, packing boolean, unpacking boolean, box_delivery boolean, piano boolean, storage boolean,
-	    onsites boolean, callback boolean, crating boolean, disassembly_assembly boolean, wall_dismounting boolean,
-	    box_delivery_range numeric, storage_in_transit boolean, warehousing boolean, local_cents_per_cubic_foot numeric,
-	    pu_lat numeric, pu_long numeric, latest_pc_id integer, mover_earth earth, distance_to_pu numeric, local_consult_only boolean, interstate_consult_only boolean);
-
-	    --INTERSTATE MOVES
-	    IF (SELECT count(distinct(state)) FROM mp_addresses) > 1 THEN
-	        INSERT INTO movers_by_haul SELECT
-	          potential_movers.mover_name, potential_movers.id AS mover_id,
-	          price_charts.range as pick_up_mileage, price_charts.drop_off_mileage,
-	          price_charts.extra_stop_enabled,
-	          additional_services.packing,additional_services.unpacking, additional_services.box_delivery,
-	          additional_services.piano, additional_services.storage, additional_services.onsites,additional_services.callback,
-	          additional_services.crating,additional_services.disassembly_assembly,
-	          additional_services.wall_dismounting, price_charts.box_delivery_range,
-	          storage_details.storage_in_transit, storage_details.warehousing,
-	          price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
-	          price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
-	          (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
-	          (SELECT * FROM earth_distance(ll_to_earth(price_charts.latitude, price_charts.longitude), pu_earth))/1609.34 AS distance_to_pu,
-	          potential_movers.local_consult_only, potential_movers.interstate_consult_only
-	        FROM potential_movers
-	          JOIN price_charts
-	            ON price_charts.id = potential_movers.latest_pc_id
-
-	            --INTERSTATE CERTIFICATION
-	            AND price_charts.us_dot IS NOT NULL
-	            AND price_charts.us_dot <> ''
-	            AND price_charts.usa_interstate_moves = 't'
-
-	            --PICK UP IN RANGE
-	            AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
-	                ll_to_earth(price_charts.latitude, price_charts.longitude),
-	                pu_earth))
-
-	            --LESS THAN MAX CUBIC FEET
-	            AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_estimate = true)
-	          JOIN additional_services
-	            ON additional_services.price_chart_id = price_charts.id
-	          JOIN storage_details
-	            ON storage_details.additional_services_id = additional_services.id;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
-	          RAISE EXCEPTION 'No interstate movers support this pick up address or can carry such a large amount';
-	        END IF;
-
-	    --INTRASTATE MOVES
-	    ELSEIF do_key IS NOT NULL THEN
-	        INSERT INTO movers_by_haul SELECT
-	          potential_movers.mover_name, potential_movers.id AS mover_id,
-	          price_charts.range as pick_up_mileage, price_charts.drop_off_mileage,
-	          price_charts.extra_stop_enabled,
-	          additional_services.packing,additional_services.unpacking, additional_services.box_delivery,
-	          additional_services.piano, additional_services.storage, additional_services.onsites,additional_services.callback,
-	          additional_services.crating,additional_services.disassembly_assembly,
-	          additional_services.wall_dismounting, price_charts.box_delivery_range,
-	          storage_details.storage_in_transit, storage_details.warehousing,
-	          price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
-	          price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
-	          (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
-	          (SELECT * FROM earth_distance(ll_to_earth(price_charts.latitude, price_charts.longitude), pu_earth))/1609.34 AS distance_to_pu,
-	          potential_movers.local_consult_only, potential_movers.interstate_consult_only
-	        FROM potential_movers
-	          JOIN price_charts
-	            ON price_charts.id = potential_movers.latest_pc_id
-
-	            --INTRASTATE CERTIFICATION
-	            AND price_charts.local_moves = true
-	            AND (price_charts.state_authority_1_state = pu_state OR
-	                 price_charts.state_authority_2_state = pu_state OR
-	                 price_charts.state_authority_3_state = pu_state OR
-	                 price_charts.state_authority_4_state = pu_state )
-
-	            --PICK UP IN RANGE
-	            AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
-	                ll_to_earth(price_charts.latitude, price_charts.longitude),
-	                pu_earth))
-
-	            --LESS THAN MAX CUBIC FEET
-	            AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_estimate = true)
-	          JOIN additional_services
-	            ON additional_services.price_chart_id = price_charts.id
-	          JOIN storage_details
-	            ON storage_details.additional_services_id = additional_services.id;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
-	          RAISE EXCEPTION 'No in state movers support this pick up address or can carry such a large amount';
-	        END IF;
-	            --CHECK FOR MINIMUM DISTANCE IN PA AND IL
-	          IF pu_state in ('IL', 'PA') THEN
-	            DELETE FROM movers_by_haul
-	            WHERE movers_by_haul.mover_id
-	            IN (SELECT movers_by_haul.mover_id FROM movers_by_haul
-	              JOIN price_charts
-	              ON price_charts.id = movers_by_haul.latest_pc_id
-	              AND movers_by_haul.local_consult_only = FALSE
-	              AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT earth_distance(COALESCE(do_earth,movers_by_haul.mover_earth),pu_earth)));
-	          END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
-	          RAISE EXCEPTION 'Moves in IL or PA must exceed the minimum distance';
-	        END IF;
-	    ELSE
-
-	      --MIS ELIGIBILITY
-	        INSERT INTO movers_by_haul SELECT
-	          potential_movers.mover_name, potential_movers.id AS mover_id,
-	          price_charts.range as pick_up_mileage, price_charts.drop_off_mileage,
-	          price_charts.extra_stop_enabled,
-	          additional_services.packing,additional_services.unpacking, additional_services.box_delivery,
-	          additional_services.piano, additional_services.storage, additional_services.onsites,additional_services.callback,
-	          additional_services.crating,additional_services.disassembly_assembly,
-	          additional_services.wall_dismounting, price_charts.box_delivery_range,
-	          storage_details.storage_in_transit, storage_details.warehousing,
-	          price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
-	          price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
-	          (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
-	          (SELECT * FROM earth_distance(ll_to_earth(price_charts.latitude, price_charts.longitude), pu_earth))/1609.34 AS distance_to_pu,
-	          potential_movers.local_consult_only, potential_movers.interstate_consult_only
-	        FROM potential_movers
-	          JOIN price_charts
-	            ON price_charts.id = potential_movers.latest_pc_id
-	          JOIN zip_codes
-	            ON price_charts.zip = zip_codes.zip
-
-	            --PICK UP IN RANGE
-	            AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
-	                ll_to_earth(price_charts.latitude, price_charts.longitude),
-	                pu_earth))
-
-	            --LESS THAN MAX CUBIC FEET
-	            AND (price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet)
-	          JOIN additional_services
-	            ON additional_services.price_chart_id = price_charts.id
-	          JOIN storage_details
-	            ON storage_details.additional_services_id = additional_services.id
-
-	          --FILTERS TO HANDLE IN/OUT OF STATE
-	          WHERE(
-	            CASE WHEN zip_codes.state <> pu_state THEN
-	            --INTERSTATE CERTIFICATION
-	              price_charts.us_dot IS NOT NULL
-	              AND price_charts.us_dot <> ''
-	              AND price_charts.usa_interstate_moves = 't'
-	            WHEN zip_codes.state = pu_state THEN
-
-	            --INTRASTATE CERTIFICATION
-	              price_charts.local_moves = true
-	              AND (price_charts.state_authority_1_state = pu_state OR
-	                  price_charts.state_authority_2_state = pu_state OR
-	                  price_charts.state_authority_3_state = pu_state OR
-	                  price_charts.state_authority_4_state = pu_state )
-	--               AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)),pu_earth)
-	            END);
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
-	          RAISE EXCEPTION 'No movers support this storage pick up address';
-	        END IF;
-
-	            --CHECK FOR MINIMUM DISTANCE IN PA AND IL
-	          IF pu_state in ('IL', 'PA') THEN
-	            DELETE FROM movers_by_haul
-	            WHERE movers_by_haul.mover_id
-	            IN (SELECT movers_by_haul.mover_id FROM movers_by_haul
-	              JOIN price_charts
-	              ON price_charts.id = movers_by_haul.latest_pc_id
-	              AND movers_by_haul.local_consult_only = FALSE
-	              AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT earth_distance(COALESCE(do_earth,movers_by_haul.mover_earth),pu_earth)));
-	          END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
-	          RAISE EXCEPTION 'Moves in IL or PA must exceed the minimum distance';
-	        END IF;
-
-	    END IF;
-
-	    --FILTER BY EXTRA PICK UP
-	    IF (SELECT extra_pick_up_enabled FROM mp) = true THEN
-	      DELETE FROM movers_by_haul WHERE (SELECT * FROM earth_distance(epu_earth,movers_by_haul.mover_earth)) > movers_by_haul.pick_up_mileage * 1609.34;
-	    END IF;
-
-	    --FIND LOCAL MOVERS
-	    DROP TABLE IF EXISTS mover_local_locations;
-	    CREATE TEMP TABLE mover_local_locations AS (
-	      SELECT CAST(NULL AS INT) as mover_location_id,
-	        movers_by_haul.latest_pc_id as price_chart_id,
-	        movers_by_haul.local_cents_per_cubic_foot as cents_per_cubic_foot,
-	        CAST('local' AS VARCHAR) as location_type,
-	        CAST(NULL AS INT) as maximum_delivery_days,
-	        CAST(NULL AS INT) as minimum_delivery_days,
-	        CAST(NULL AS BOOLEAN) as dedicated,
-	        CAST(NULL AS NUMERIC) as extra_fee,
-	        movers_by_haul.drop_off_mileage AS range,
-	        CAST(NULL AS BOOLEAN) as partially_active,
-	        movers_by_haul.pu_lat as location_latitude, movers_by_haul.pu_long as location_longitude,
-	        earth_distance(movers_by_haul.mover_earth,do_earth)/1609.34 AS distance_in_miles
-	      FROM movers_by_haul
-	      WHERE (SELECT * FROM earth_distance(movers_by_haul.mover_earth, COALESCE(do_earth,pu_earth))) <= movers_by_haul.drop_off_mileage * 1609.34
-	      AND (SELECT local_moves FROM price_charts WHERE movers_by_haul.latest_pc_id = price_charts.id ));
-
-	    --FIND ALL LONG DISTANCE MOVER LOCATIONS
-	    DROP TABLE IF EXISTS mover_state_locations;
-	    CREATE TEMP TABLE mover_state_locations AS (
-	      SELECT mover_locations.id as mover_location_id,
-	        mover_locations.price_chart_id, mover_locations.cents_per_cubic_foot,
-	        mover_locations.location_type, mover_locations.maximum_delivery_days,
-	        mover_locations.minimum_delivery_days, mover_locations.dedicated,
-	        mover_locations.extra_fee, mover_locations.range, mover_locations.partially_active,
-	        CAST(NULL AS NUMERIC) as location_latitude, CAST(NULL AS NUMERIC) AS location_longitude,
-	        CAST(NULL AS NUMERIC) AS distance_in_miles
-	      FROM public.mover_locations
-	      WHERE state_code in(do_state, edo_state)
-	            AND mover_locations.active = true
-	            AND mover_locations.location_type='state'
-	            AND mover_locations.price_chart_id in (SELECT DISTINCT movers_by_haul.latest_pc_id from movers_by_haul)
-	            AND mover_locations.price_chart_id not in (SELECT DISTINCT mover_local_locations.price_chart_id FROM mover_local_locations));
-
-	    --FIND ALL FULL COVERAGE LOCATIONS
-	    DROP TABLE IF EXISTS mover_full_state_locations;
-	    CREATE TEMP TABLE mover_full_state_locations AS (
-	      SELECT mover_state_locations.mover_location_id,
-	        mover_state_locations.price_chart_id, mover_state_locations.cents_per_cubic_foot,
-	        mover_state_locations.location_type, mover_state_locations.maximum_delivery_days,
-	        mover_state_locations.minimum_delivery_days, mover_state_locations.dedicated,
-	        mover_state_locations.extra_fee, mover_state_locations.range, mover_state_locations.partially_active,
-	        CAST(NULL AS NUMERIC) as location_latitude, CAST(NULL AS NUMERIC) AS location_longitude,
-	        CAST(NULL AS NUMERIC) AS distance_in_miles
-	      FROM mover_state_locations
-	      WHERE mover_state_locations.partially_active = false);
-
-	    --FIND ALL PARTIAL COVERAGE LOCATIONS SELECTING THE LOCATION THAT IS CLOSEST AND ALSO WITHIN RANGE
-	    DROP TABLE IF EXISTS mover_city_locations;
-	    CREATE TEMP TABLE mover_city_locations AS (
-	      SELECT closest_locations.id as mover_location_id,
-	        closest_locations.price_chart_id, closest_locations.cents_per_cubic_foot,
-	        closest_locations.location_type, closest_locations.maximum_delivery_days,
-	        closest_locations.minimum_delivery_days, closest_locations.dedicated,
-	        closest_locations.extra_fee, closest_locations.range, closest_locations.partially_active,
-	        closest_locations.latitude as location_latitude, closest_locations.longitude AS location_longitude,
-	        closest_locations.distance_in_miles
-	      FROM (
-	      SELECT * FROM (SELECT *, rank()
-	        OVER (PARTITION BY all_valid_locations.price_chart_id ORDER BY earth_distance(ll_to_earth(latitude,longitude),(SELECT * FROM ll_to_earth(
-	        (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'drop_off'),
-	        (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'drop_off')))) ASC, all_valid_locations.cents_per_cubic_foot DESC) as rank
-	       FROM
-	      (SELECT mover_locations.*, earth_distance(ll_to_earth(latitude,longitude),(SELECT * FROM ll_to_earth(
-	        (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'drop_off'),
-	        (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'drop_off'))))/1609.34 AS distance_in_miles
-	          FROM public.mover_locations
-	            WHERE state_code IN ((SELECT state FROM mp_addresses WHERE role_in_plan = 'drop_off'), (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'))
-	            AND mover_locations.active = TRUE
-	            AND mover_locations.location_type='city'
-	            AND mover_locations.price_chart_id IN (SELECT DISTINCT mover_state_locations.price_chart_id FROM mover_state_locations WHERE mover_state_locations.partially_active = true)
-	            AND mover_locations.price_chart_id NOT IN (SELECT DISTINCT mover_full_state_locations.price_chart_id FROM mover_full_state_locations)) AS all_valid_locations
-	      WHERE all_valid_locations.distance_in_miles <= all_valid_locations.range) AS ranked_locations WHERE rank = 1) AS closest_locations);
-
-	    --UNION LOCAL,STATE,CITY LOCATIONS
-	    DROP TABLE IF EXISTS all_mover_locations;
-	    CREATE TEMP TABLE all_mover_locations AS (
-	      SELECT * FROM mover_local_locations
-	      UNION ALL SELECT * FROM mover_full_state_locations
-	      UNION ALL SELECT * FROM mover_city_locations);
-	    DROP TABLE IF EXISTS movers_with_location;
-	    CREATE TEMP TABLE movers_with_location AS
-	      SELECT * FROM movers_by_haul  JOIN all_mover_locations on all_mover_locations.price_chart_id =  movers_by_haul.latest_pc_id;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers support this drop off address';
-	        END IF;
-
-	    --FILTER BY EXTRA DROP OFF
-	    IF (SELECT mp.extra_drop_off_enabled FROM mp) = true THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.extra_stop_enabled = false;
-	      DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'local' AND earth_distance(movers_with_location.mover_earth,edo_earth)/1609.34 > movers_with_location.drop_off_mileage;
-	      DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'state' AND earth_distance(do_earth,edo_earth)/1609.34 > GREATEST(50.0,movers_with_location.drop_off_mileage);
-	      DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'city'  AND earth_distance(ll_to_earth(movers_with_location.location_latitude,movers_with_location.location_longitude),edo_earth)/1609.34 > movers_with_location.range;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support this extra drop off location';
-	        END IF;
-
-	    --FILTER BY EXTRA PICK UP
-	    IF (SELECT mp.extra_pick_up_enabled FROM mp) = true THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.extra_stop_enabled = false;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support this extra pick up location';
-	        END IF;
-
-
-
-	    --FILTERING BY PACKING SERVICE
-	    IF (SELECT follow_up_packing_service_id FROM mp) = 1 OR (SELECT initial_packing_service_id FROM mp) = 1 THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.packing = false;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No Movers can support packing';
-	        END IF;
-
-	    IF (SELECT follow_up_packing_service_id FROM mp) = 2 OR (SELECT initial_packing_service_id FROM mp) = 2 THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.packing = false;
-	      DELETE FROM movers_with_location WHERE movers_with_location.unpacking = false;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support support unpacking';
-	        END IF;
-
-	    --FILTER BY BOX DELIVERY
-	    IF (SELECT box_delivery_date FROM mp) IS NOT NULL THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.box_delivery = false;
-	      DELETE FROM movers_with_location WHERE (earth_distance(pu_earth,movers_with_location.mover_earth)* 0.000621371) > movers_with_location.box_delivery_range;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support box delivery';
-	        END IF;
-
-	    --FILTER BY PIANO
-	    IF (SELECT COUNT(*) FROM mp_ii WHERE requires_piano_services = TRUE) > 0 THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.piano = false;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support delivery of a piano';
-	        END IF;
-
-	    --FILTER BY MIS
-	    IF (SELECT COUNT(*) FROM mp_addresses WHERE role_in_plan = 'drop_off') = 0 THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.warehousing = false OR movers_with_location.storage = false;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support moving into storage';
-	        END IF;
-
-	    --FILTER BY SIT
-	    IF (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.storage_in_transit = false OR movers_with_location.storage = false;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support storage in transit';
-	        END IF;
-
-
-
-	--     --FILTER BY PHONE REQUEST
-	--     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'InHomeRequest') > 0 THEN
-	--       DELETE FROM movers_with_location WHERE movers_with_location.onsites = false;
-	--     END IF;
-	--
-	--         --RAISE NO MOVER FOUND ERROR
-	--         IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	--           RAISE EXCEPTION 'No movers can support phone requests';
-	--         END IF;
-	--
-	--     --FILTER BY ONSITE REQUEST
-	--     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'PhoneRequest') > 0 THEN
-	--       DELETE FROM movers_with_location WHERE movers_with_location.callback = false;
-	--     END IF;
-	--
-	--         --RAISE NO MOVER FOUND ERROR
-	--         IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	--           RAISE EXCEPTION 'No movers can support onsite requests';
-	--         END IF;
-
-	    --FILTER BY CRATING
-	    IF num_crating > 0 THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.crating = false;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support crating';
-	        END IF;
-
-	    --FILTER BY DISSASEMBLY/ASSEMBLY
-	    IF (SELECT count(*) FROM mp_ii WHERE assembly_required = TRUE) > 0 THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.disassembly_assembly = false;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support dissasembly/assembly';
-	        END IF;
-
-	    --FILTER BY WALL REMOVAL
-	    IF (SELECT count(*) FROM mp_ii WHERE wall_removal_required = TRUE) > 0 THEN
-	      DELETE FROM movers_with_location WHERE movers_with_location.wall_dismounting = false;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
-	          RAISE EXCEPTION 'No movers can support wall dismounting';
-	        END IF;
-
-	    --FILTER BY AVAILABILITY AND GET BALANCING RATE
-	    DROP TABLE IF EXISTS movers_with_location_and_balancing_rate;
-	    CREATE TEMP TABLE movers_with_location_and_balancing_rate AS (
-	      SELECT * FROM
-	        (SELECT
-	          mwl.*,
-
-	          --BALANCING RATE
-	          COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary) AS balancing_rate_primary,
-	          COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary) AS balancing_rate_secondary,
-
-	          --AVAILABILITY CALCULATIONS
-	          CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
-		          CASE WHEN COALESCE(frz_daily.capacity_secondary, frz_weekly.capacity_secondary) IS NULL
-	            THEN COALESCE(frz_daily.capacity_primary, frz_weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-		          ELSE COALESCE(frz_daily.capacity_secondary, frz_weekly.capacity_secondary) - COALESCE(pm, 0)
-	            END
-	          ELSE
-		          CASE WHEN COALESCE(daily.capacity_secondary, weekly.capacity_secondary) IS NULL
-	            THEN COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-		          ELSE COALESCE(daily.capacity_secondary, weekly.capacity_secondary) - COALESCE(pm, 0)
-	            END
-	          END AS net_pm,
-	          CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
-		          CASE WHEN COALESCE(frz_daily.capacity_secondary, frz_weekly.capacity_secondary) IS NULL
-	            THEN COALESCE(frz_daily.capacity_primary, frz_weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-		          ELSE COALESCE(frz_daily.capacity_primary, frz_weekly.capacity_primary) - COALESCE(am, 0)
-	            END
-	          ELSE
-		          CASE WHEN COALESCE(daily.capacity_secondary, weekly.capacity_secondary) IS NULL
-	            THEN COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
-		          ELSE COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0)
-	            END
-	          END AS net_am,
-	          CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
-		          CASE WHEN COALESCE(frz_daily_sit.capacity_secondary, frz_weekly_sit.capacity_secondary) IS NULL
-	            THEN COALESCE(frz_daily_sit.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(sit_am, 0) - COALESCE(sit_pm, 0)
-		          ELSE COALESCE(frz_daily_sit.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(sit_am, 0)
-	            END
-	          ELSE
-		          CASE WHEN COALESCE(daily_sit.capacity_secondary, weekly_sit.capacity_secondary) IS NULL
-	            THEN COALESCE(daily_sit.capacity_primary, weekly_sit.capacity_primary) - COALESCE(sit_am, 0) - COALESCE(sit_pm, 0)
-		          ELSE COALESCE(daily_sit.capacity_primary, weekly_sit.capacity_primary) - COALESCE(sit_am, 0)
-	            END
-	          END AS sit_avail
-	        FROM movers_with_location as mwl
-
-	        --ADJUSTMENTS BY DATE
-	        LEFT JOIN(
-	           SELECT *
-	           FROM daily_adjustments AS day_adj
-	           JOIN daily_adjustment_data AS adj_data
-	             ON day_adj.daily_adjustment_datum_id = adj_data.id
-	             AND day_adj.day = mov_date) AS daily
-	           ON daily.price_chart_id = mwl.price_chart_id
-
-	        --ADJUSTMENTS BY WEEKDAY
-	        LEFT JOIN(SELECT *
-	           FROM daily_adjustment_rules AS rul_adj
-	           JOIN daily_adjustment_data AS adj_data
-	             ON rul_adj.daily_adjustment_datum_id = adj_data.id
-	             AND rul_adj.weekday =
-	               CASE WHEN EXTRACT(isodow FROM mov_date :: DATE) = 7 THEN
-	                  0
-	                ELSE
-	                  EXTRACT(isodow FROM mov_date :: DATE)
-	                END) AS weekly
-	           ON weekly.price_chart_id = mwl.price_chart_id
-
-	        --SIT ADJUSTMENTS BY DATE
-	        LEFT JOIN(
-	           SELECT *
-	           FROM daily_adjustments AS day_adj
-	           JOIN daily_adjustment_data AS adj_data
-	             ON day_adj.daily_adjustment_datum_id = adj_data.id
-	             AND day_adj.day = sit_date) AS daily_sit
-	           ON daily_sit.price_chart_id = mwl.price_chart_id
-
-	        --SIT ADJUSTMENTS BY WEEKDAY
-	        LEFT JOIN(
-	           SELECT *
-	           FROM daily_adjustment_rules AS rul_adj
-	           JOIN daily_adjustment_data AS adj_data
-	             ON rul_adj.daily_adjustment_datum_id = adj_data.id
-	             AND rul_adj.weekday =
-	              CASE WHEN EXTRACT(isodow FROM sit_date  :: DATE) = 7 THEN
-	                0
-	              ELSE
-	                EXTRACT(isodow FROM sit_date  :: DATE)
-	              END) AS weekly_sit
-	           ON weekly_sit.price_chart_id = mwl.price_chart_id
-
-	        --ADJUSTMENTS BY DATE FOR FROZEN MOVER
-	        LEFT JOIN(
-	           SELECT *
-	           FROM daily_adjustments AS day_adj
-	           JOIN daily_adjustment_data AS adj_data
-	             ON day_adj.daily_adjustment_datum_id = adj_data.id
-	             AND day_adj.day = mov_date) AS frz_daily
-	           ON frozen_pc_id = mwl.price_chart_id
-	           AND frz_daily.price_chart_id = frozen_mover_latest_pc_id
-
-	        --ADJUSTMENTS BY WEEKDAY FOR FROZEN MOVER
-	        LEFT JOIN(SELECT *
-	           FROM daily_adjustment_rules AS rul_adj
-	           JOIN daily_adjustment_data AS adj_data
-	             ON rul_adj.daily_adjustment_datum_id = adj_data.id
-	             AND rul_adj.weekday =
-	               CASE WHEN EXTRACT(isodow FROM mov_date :: DATE) = 7 THEN
-	                  0
-	                ELSE
-	                  EXTRACT(isodow FROM mov_date :: DATE)
-	                END) AS frz_weekly
-	           ON frozen_pc_id = mwl.price_chart_id
-	           AND frz_weekly.price_chart_id = frozen_mover_latest_pc_id
-
-	        --SIT ADJUSTMENTS BY DATE FOR FROZEN MOVER
-	        LEFT JOIN(
-	           SELECT *
-	           FROM daily_adjustments AS day_adj
-	           JOIN daily_adjustment_data AS adj_data
-	             ON day_adj.daily_adjustment_datum_id = adj_data.id
-	             AND day_adj.day = sit_date) AS frz_daily_sit
-	           ON frozen_pc_id = mwl.price_chart_id
-	           AND frz_daily_sit.price_chart_id = frozen_mover_latest_pc_id
-
-	        --SIT ADJUSTMENTS BY WEEKDAY FOR FROZEN MOVER
-	        LEFT JOIN(
-	           SELECT *
-	           FROM daily_adjustment_rules AS rul_adj
-	           JOIN daily_adjustment_data AS adj_data
-	             ON rul_adj.daily_adjustment_datum_id = adj_data.id
-	             AND rul_adj.weekday =
-	              CASE WHEN EXTRACT(isodow FROM sit_date  :: DATE) = 7 THEN
-	                0
-	              ELSE
-	                EXTRACT(isodow FROM sit_date  :: DATE)
-	              END) AS frz_weekly_sit
-	           ON frozen_pc_id = mwl.price_chart_id
-	           AND frz_weekly_sit.price_chart_id = frozen_mover_latest_pc_id
-
-	        --MOVES BY MOVER ON MOVE DATE
-	        LEFT JOIN(
-	          SELECT
-	            pc.mover_id,
-	            move_date,
-	            COUNT(CASE WHEN move_time NOT LIKE '%PM%' THEN move_time ELSE NULL END) AS am,
-	            COUNT(CASE WHEN move_time LIKE '%PM%' THEN move_time ELSE NULL END) AS pm
-	          FROM jobs AS jb
-	          JOIN move_plans AS mp
-	            ON mp.id = jb.move_plan_id
-	            AND mover_state IN ('new', 'accepted', 'pending')
-	            AND user_state <> 'cancelled'
-	          JOIN price_charts AS pc
-	            ON pc.id = jb.price_chart_id
-	            GROUP BY move_date, pc.mover_id) AS jobs
-	        ON mwl.mover_id = jobs.mover_id
-	        AND mov_date = jobs.move_date
-
-	        --MOVES BY MOVER ON SIT DATE
-	        LEFT JOIN(
-	          SELECT
-	            pc.mover_id,
-	            move_date,
-	            COUNT(CASE WHEN move_time NOT LIKE '%PM%' THEN move_time ELSE NULL END) AS sit_am,
-	            COUNT(CASE WHEN move_time LIKE '%PM%' THEN move_time ELSE NULL END) AS sit_pm
-	          FROM jobs AS jb
-	          JOIN move_plans AS mp
-	            ON mp.id = jb.move_plan_id
-	            AND mover_state IN ('new', 'accepted', 'pending')
-	            AND user_state <> 'cancelled'
-	          JOIN price_charts AS pc
-	            ON pc.id = jb.price_chart_id
-	            GROUP BY move_date, pc.mover_id) AS sit_jobs
-	        ON mwl.mover_id = jobs.mover_id
-	        AND sit_date = jobs.move_date
-	        ) AS availability
-	        WHERE
-	        CASE
-	          WHEN for_estimate = TRUE THEN
-	            1=1
-	          WHEN mov_time = 'am' THEN
-	            availability.net_am > 0
-	          ELSE
-	            availability.net_pm > 0
-	        END
-	    );
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location_and_balancing_rate) = 0 THEN
-	          RAISE EXCEPTION 'No movers are available on this move date';
-	        END IF;
-
-	      --FILTER BY SIT AVAILABILITY
-	    IF sit_date IS NOT NULL AND for_estimate = false THEN
-	      DELETE FROM movers_with_location_and_balancing_rate WHERE movers_with_location_and_balancing_rate.sit_avail <= 0;
-	    END IF;
-
-	        --RAISE NO MOVER FOUND ERROR
-	        IF (SELECT COUNT(*) FROM movers_with_location_and_balancing_rate) = 0 THEN
-	          RAISE EXCEPTION 'No movers are available on this storage move out date';
-	        END IF;
-	  END IF;
+      --FILTER BY HAUL TYPE, PICK UP DISTANCE, INTRA/INTER(STATE) CERTIFICATION, MAX CUBIC FEET, MINIMUM DISTANCE
+      DROP TABLE IF EXISTS movers_by_haul;
+      CREATE TEMP TABLE movers_by_haul (mover_name varchar, mover_id integer, pick_up_mileage numeric, drop_off_mileage numeric,
+      extra_stop_enabled boolean, packing boolean, unpacking boolean, box_delivery boolean, piano boolean, storage boolean,
+      onsites boolean, callback boolean, crating boolean, disassembly_assembly boolean, wall_dismounting boolean,
+      box_delivery_range numeric, storage_in_transit boolean, warehousing boolean, local_cents_per_cubic_foot numeric,
+      pu_lat numeric, pu_long numeric, latest_pc_id integer, mover_earth earth, distance_to_pu numeric, local_consult_only boolean, interstate_consult_only boolean);
+
+      --INTERSTATE MOVES
+      IF (SELECT count(distinct(state)) FROM mp_addresses) > 1 THEN
+          INSERT INTO movers_by_haul SELECT
+            potential_movers.mover_name, potential_movers.id AS mover_id,
+            price_charts.range as pick_up_mileage, price_charts.drop_off_mileage,
+            price_charts.extra_stop_enabled,
+            additional_services.packing,additional_services.unpacking, additional_services.box_delivery,
+            additional_services.piano, additional_services.storage, additional_services.onsites,additional_services.callback,
+            additional_services.crating,additional_services.disassembly_assembly,
+            additional_services.wall_dismounting, price_charts.box_delivery_range,
+            storage_details.storage_in_transit, storage_details.warehousing,
+            price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
+            price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
+            (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
+            (SELECT * FROM earth_distance(ll_to_earth(price_charts.latitude, price_charts.longitude), pu_earth))/1609.34 AS distance_to_pu,
+            potential_movers.local_consult_only, potential_movers.interstate_consult_only
+          FROM potential_movers
+            JOIN price_charts
+              ON price_charts.id = potential_movers.latest_pc_id
+
+              --INTERSTATE CERTIFICATION
+              AND price_charts.us_dot IS NOT NULL
+              AND price_charts.us_dot <> ''
+              AND price_charts.usa_interstate_moves = 't'
+
+              --PICK UP IN RANGE
+              AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
+                  ll_to_earth(price_charts.latitude, price_charts.longitude),
+                  pu_earth))
+
+              --LESS THAN MAX CUBIC FEET
+              AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_estimate = true)
+            JOIN additional_services
+              ON additional_services.price_chart_id = price_charts.id
+            JOIN storage_details
+              ON storage_details.additional_services_id = additional_services.id;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
+            RAISE EXCEPTION 'No interstate movers support this pick up address or can carry such a large amount';
+          END IF;
+
+      --INTRASTATE MOVES
+      ELSEIF do_key IS NOT NULL THEN
+          INSERT INTO movers_by_haul SELECT
+            potential_movers.mover_name, potential_movers.id AS mover_id,
+            price_charts.range as pick_up_mileage, price_charts.drop_off_mileage,
+            price_charts.extra_stop_enabled,
+            additional_services.packing,additional_services.unpacking, additional_services.box_delivery,
+            additional_services.piano, additional_services.storage, additional_services.onsites,additional_services.callback,
+            additional_services.crating,additional_services.disassembly_assembly,
+            additional_services.wall_dismounting, price_charts.box_delivery_range,
+            storage_details.storage_in_transit, storage_details.warehousing,
+            price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
+            price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
+            (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
+            (SELECT * FROM earth_distance(ll_to_earth(price_charts.latitude, price_charts.longitude), pu_earth))/1609.34 AS distance_to_pu,
+            potential_movers.local_consult_only, potential_movers.interstate_consult_only
+          FROM potential_movers
+            JOIN price_charts
+              ON price_charts.id = potential_movers.latest_pc_id
+
+              --INTRASTATE CERTIFICATION
+              AND price_charts.local_moves = true
+              AND (price_charts.state_authority_1_state = pu_state OR
+                   price_charts.state_authority_2_state = pu_state OR
+                   price_charts.state_authority_3_state = pu_state OR
+                   price_charts.state_authority_4_state = pu_state )
+
+              --PICK UP IN RANGE
+              AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
+                  ll_to_earth(price_charts.latitude, price_charts.longitude),
+                  pu_earth))
+
+              --LESS THAN MAX CUBIC FEET
+              AND ((price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet) OR for_estimate = true)
+            JOIN additional_services
+              ON additional_services.price_chart_id = price_charts.id
+            JOIN storage_details
+              ON storage_details.additional_services_id = additional_services.id;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
+            RAISE EXCEPTION 'No in state movers support this pick up address or can carry such a large amount';
+          END IF;
+              --CHECK FOR MINIMUM DISTANCE IN PA AND IL
+            IF pu_state in ('IL', 'PA') THEN
+              DELETE FROM movers_by_haul
+              WHERE movers_by_haul.mover_id
+              IN (SELECT movers_by_haul.mover_id FROM movers_by_haul
+                JOIN price_charts
+                ON price_charts.id = movers_by_haul.latest_pc_id
+                AND movers_by_haul.local_consult_only = FALSE
+                AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT earth_distance(COALESCE(do_earth,movers_by_haul.mover_earth),pu_earth)));
+            END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
+            RAISE EXCEPTION 'Moves in IL or PA must exceed the minimum distance';
+          END IF;
+      ELSE
+
+        --MIS ELIGIBILITY
+          INSERT INTO movers_by_haul SELECT
+            potential_movers.mover_name, potential_movers.id AS mover_id,
+            price_charts.range as pick_up_mileage, price_charts.drop_off_mileage,
+            price_charts.extra_stop_enabled,
+            additional_services.packing,additional_services.unpacking, additional_services.box_delivery,
+            additional_services.piano, additional_services.storage, additional_services.onsites,additional_services.callback,
+            additional_services.crating,additional_services.disassembly_assembly,
+            additional_services.wall_dismounting, price_charts.box_delivery_range,
+            storage_details.storage_in_transit, storage_details.warehousing,
+            price_charts.cents_per_cubic_foot as local_cents_per_cubic_foot,
+            price_charts.latitude as pu_lat,  price_charts.longitude as pu_long, potential_movers.latest_pc_id,
+            (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)) AS mover_earth,
+            (SELECT * FROM earth_distance(ll_to_earth(price_charts.latitude, price_charts.longitude), pu_earth))/1609.34 AS distance_to_pu,
+            potential_movers.local_consult_only, potential_movers.interstate_consult_only
+          FROM potential_movers
+            JOIN price_charts
+              ON price_charts.id = potential_movers.latest_pc_id
+            JOIN zip_codes
+              ON price_charts.zip = zip_codes.zip
+
+              --PICK UP IN RANGE
+              AND (price_charts.range * 1609.34) >= (SELECT * FROM earth_distance(
+                  ll_to_earth(price_charts.latitude, price_charts.longitude),
+                  pu_earth))
+
+              --LESS THAN MAX CUBIC FEET
+              AND (price_charts.max_cubic_feet IS NULL OR total_cubic_feet <= price_charts.max_cubic_feet)
+            JOIN additional_services
+              ON additional_services.price_chart_id = price_charts.id
+            JOIN storage_details
+              ON storage_details.additional_services_id = additional_services.id
+
+            --FILTERS TO HANDLE IN/OUT OF STATE
+            WHERE(
+              CASE WHEN zip_codes.state <> pu_state THEN
+              --INTERSTATE CERTIFICATION
+                price_charts.us_dot IS NOT NULL
+                AND price_charts.us_dot <> ''
+                AND price_charts.usa_interstate_moves = 't'
+              WHEN zip_codes.state = pu_state THEN
+
+              --INTRASTATE CERTIFICATION
+                price_charts.local_moves = true
+                AND (price_charts.state_authority_1_state = pu_state OR
+                    price_charts.state_authority_2_state = pu_state OR
+                    price_charts.state_authority_3_state = pu_state OR
+                    price_charts.state_authority_4_state = pu_state )
+  --               AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT (SELECT * FROM ll_to_earth(price_charts.latitude, price_charts.longitude)),pu_earth)
+              END);
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
+            RAISE EXCEPTION 'No movers support this storage pick up address';
+          END IF;
+
+              --CHECK FOR MINIMUM DISTANCE IN PA AND IL
+            IF pu_state in ('IL', 'PA') THEN
+              DELETE FROM movers_by_haul
+              WHERE movers_by_haul.mover_id
+              IN (SELECT movers_by_haul.mover_id FROM movers_by_haul
+                JOIN price_charts
+                ON price_charts.id = movers_by_haul.latest_pc_id
+                AND movers_by_haul.local_consult_only = FALSE
+                AND (price_charts.minimum_job_distance * 1609.34) >= (SELECT earth_distance(COALESCE(do_earth,movers_by_haul.mover_earth),pu_earth)));
+            END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_by_haul) = 0 THEN
+            RAISE EXCEPTION 'Moves in IL or PA must exceed the minimum distance';
+          END IF;
+
+      END IF;
+
+      --FILTER BY EXTRA PICK UP
+      IF (SELECT extra_pick_up_enabled FROM mp) = true THEN
+        DELETE FROM movers_by_haul WHERE (SELECT * FROM earth_distance(epu_earth,movers_by_haul.mover_earth)) > movers_by_haul.pick_up_mileage * 1609.34;
+      END IF;
+
+      --FIND LOCAL MOVERS
+      DROP TABLE IF EXISTS mover_local_locations;
+      CREATE TEMP TABLE mover_local_locations AS (
+        SELECT CAST(NULL AS INT) as mover_location_id,
+          movers_by_haul.latest_pc_id as price_chart_id,
+          movers_by_haul.local_cents_per_cubic_foot as cents_per_cubic_foot,
+          CAST('local' AS VARCHAR) as location_type,
+          CAST(NULL AS INT) as maximum_delivery_days,
+          CAST(NULL AS INT) as minimum_delivery_days,
+          CAST(NULL AS BOOLEAN) as dedicated,
+          CAST(NULL AS NUMERIC) as extra_fee,
+          movers_by_haul.drop_off_mileage AS range,
+          CAST(NULL AS BOOLEAN) as partially_active,
+          movers_by_haul.pu_lat as location_latitude, movers_by_haul.pu_long as location_longitude,
+          earth_distance(movers_by_haul.mover_earth,do_earth)/1609.34 AS distance_in_miles
+        FROM movers_by_haul
+        WHERE (SELECT * FROM earth_distance(movers_by_haul.mover_earth, COALESCE(do_earth,pu_earth))) <= movers_by_haul.drop_off_mileage * 1609.34
+        AND (SELECT local_moves FROM price_charts WHERE movers_by_haul.latest_pc_id = price_charts.id ));
+
+      --FIND ALL LONG DISTANCE MOVER LOCATIONS
+      DROP TABLE IF EXISTS mover_state_locations;
+      CREATE TEMP TABLE mover_state_locations AS (
+        SELECT mover_locations.id as mover_location_id,
+          mover_locations.price_chart_id, mover_locations.cents_per_cubic_foot,
+          mover_locations.location_type, mover_locations.maximum_delivery_days,
+          mover_locations.minimum_delivery_days, mover_locations.dedicated,
+          mover_locations.extra_fee, mover_locations.range, mover_locations.partially_active,
+          CAST(NULL AS NUMERIC) as location_latitude, CAST(NULL AS NUMERIC) AS location_longitude,
+          CAST(NULL AS NUMERIC) AS distance_in_miles
+        FROM public.mover_locations
+        WHERE state_code in(do_state, edo_state)
+              AND mover_locations.active = true
+              AND mover_locations.location_type='state'
+              AND mover_locations.price_chart_id in (SELECT DISTINCT movers_by_haul.latest_pc_id from movers_by_haul)
+              AND mover_locations.price_chart_id not in (SELECT DISTINCT mover_local_locations.price_chart_id FROM mover_local_locations));
+
+      --FIND ALL FULL COVERAGE LOCATIONS
+      DROP TABLE IF EXISTS mover_full_state_locations;
+      CREATE TEMP TABLE mover_full_state_locations AS (
+        SELECT mover_state_locations.mover_location_id,
+          mover_state_locations.price_chart_id, mover_state_locations.cents_per_cubic_foot,
+          mover_state_locations.location_type, mover_state_locations.maximum_delivery_days,
+          mover_state_locations.minimum_delivery_days, mover_state_locations.dedicated,
+          mover_state_locations.extra_fee, mover_state_locations.range, mover_state_locations.partially_active,
+          CAST(NULL AS NUMERIC) as location_latitude, CAST(NULL AS NUMERIC) AS location_longitude,
+          CAST(NULL AS NUMERIC) AS distance_in_miles
+        FROM mover_state_locations
+        WHERE mover_state_locations.partially_active = false);
+
+      --FIND ALL PARTIAL COVERAGE LOCATIONS SELECTING THE LOCATION THAT IS CLOSEST AND ALSO WITHIN RANGE
+      DROP TABLE IF EXISTS mover_city_locations;
+      CREATE TEMP TABLE mover_city_locations AS (
+        SELECT closest_locations.id as mover_location_id,
+          closest_locations.price_chart_id, closest_locations.cents_per_cubic_foot,
+          closest_locations.location_type, closest_locations.maximum_delivery_days,
+          closest_locations.minimum_delivery_days, closest_locations.dedicated,
+          closest_locations.extra_fee, closest_locations.range, closest_locations.partially_active,
+          closest_locations.latitude as location_latitude, closest_locations.longitude AS location_longitude,
+          closest_locations.distance_in_miles
+        FROM (
+        SELECT * FROM (SELECT *, rank()
+          OVER (PARTITION BY all_valid_locations.price_chart_id ORDER BY earth_distance(ll_to_earth(latitude,longitude),(SELECT * FROM ll_to_earth(
+          (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'drop_off'),
+          (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'drop_off')))) ASC, all_valid_locations.cents_per_cubic_foot DESC) as rank
+         FROM
+        (SELECT mover_locations.*, earth_distance(ll_to_earth(latitude,longitude),(SELECT * FROM ll_to_earth(
+          (SELECT latitude FROM mp_addresses WHERE role_in_plan = 'drop_off'),
+          (SELECT longitude FROM mp_addresses WHERE role_in_plan = 'drop_off'))))/1609.34 AS distance_in_miles
+            FROM public.mover_locations
+              WHERE state_code IN ((SELECT state FROM mp_addresses WHERE role_in_plan = 'drop_off'), (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_drop_off'))
+              AND mover_locations.active = TRUE
+              AND mover_locations.location_type='city'
+              AND mover_locations.price_chart_id IN (SELECT DISTINCT mover_state_locations.price_chart_id FROM mover_state_locations WHERE mover_state_locations.partially_active = true)
+              AND mover_locations.price_chart_id NOT IN (SELECT DISTINCT mover_full_state_locations.price_chart_id FROM mover_full_state_locations)) AS all_valid_locations
+        WHERE all_valid_locations.distance_in_miles <= all_valid_locations.range) AS ranked_locations WHERE rank = 1) AS closest_locations);
+
+      --UNION LOCAL,STATE,CITY LOCATIONS
+      DROP TABLE IF EXISTS all_mover_locations;
+      CREATE TEMP TABLE all_mover_locations AS (
+        SELECT * FROM mover_local_locations
+        UNION ALL SELECT * FROM mover_full_state_locations
+        UNION ALL SELECT * FROM mover_city_locations);
+      DROP TABLE IF EXISTS movers_with_location;
+      CREATE TEMP TABLE movers_with_location AS
+        SELECT * FROM movers_by_haul  JOIN all_mover_locations on all_mover_locations.price_chart_id =  movers_by_haul.latest_pc_id;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers support this drop off address';
+          END IF;
+
+      --FILTER BY EXTRA DROP OFF
+      IF (SELECT mp.extra_drop_off_enabled FROM mp) = true THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.extra_stop_enabled = false;
+        DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'local' AND earth_distance(movers_with_location.mover_earth,edo_earth)/1609.34 > movers_with_location.drop_off_mileage;
+        DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'state' AND earth_distance(do_earth,edo_earth)/1609.34 > GREATEST(50.0,movers_with_location.drop_off_mileage);
+        DELETE FROM movers_with_location WHERE movers_with_location.location_type = 'city'  AND earth_distance(ll_to_earth(movers_with_location.location_latitude,movers_with_location.location_longitude),edo_earth)/1609.34 > movers_with_location.range;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support this extra drop off location';
+          END IF;
+
+      --FILTER BY EXTRA PICK UP
+      IF (SELECT mp.extra_pick_up_enabled FROM mp) = true THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.extra_stop_enabled = false;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support this extra pick up location';
+          END IF;
+
+
+
+      --FILTERING BY PACKING SERVICE
+      IF (SELECT follow_up_packing_service_id FROM mp) = 1 OR (SELECT initial_packing_service_id FROM mp) = 1 THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.packing = false;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No Movers can support packing';
+          END IF;
+
+      IF (SELECT follow_up_packing_service_id FROM mp) = 2 OR (SELECT initial_packing_service_id FROM mp) = 2 THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.packing = false;
+        DELETE FROM movers_with_location WHERE movers_with_location.unpacking = false;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support support unpacking';
+          END IF;
+
+      --FILTER BY BOX DELIVERY
+      IF (SELECT box_delivery_date FROM mp) IS NOT NULL THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.box_delivery = false;
+        DELETE FROM movers_with_location WHERE (earth_distance(pu_earth,movers_with_location.mover_earth)* 0.000621371) > movers_with_location.box_delivery_range;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support box delivery';
+          END IF;
+
+      --FILTER BY PIANO
+      IF (SELECT COUNT(*) FROM mp_ii WHERE requires_piano_services = TRUE) > 0 THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.piano = false;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support delivery of a piano';
+          END IF;
+
+      --FILTER BY MIS
+      IF (SELECT COUNT(*) FROM mp_addresses WHERE role_in_plan = 'drop_off') = 0 THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.warehousing = false OR movers_with_location.storage = false;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support moving into storage';
+          END IF;
+
+      --FILTER BY SIT
+      IF (SELECT storage_move_out_date FROM mp) IS NOT NULL THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.storage_in_transit = false OR movers_with_location.storage = false;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support storage in transit';
+          END IF;
+
+
+
+  --     --FILTER BY PHONE REQUEST
+  --     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'InHomeRequest') > 0 THEN
+  --       DELETE FROM movers_with_location WHERE movers_with_location.onsites = false;
+  --     END IF;
+  --
+  --         --RAISE NO MOVER FOUND ERROR
+  --         IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+  --           RAISE EXCEPTION 'No movers can support phone requests';
+  --         END IF;
+  --
+  --     --FILTER BY ONSITE REQUEST
+  --     IF (SELECT count(*) FROM onsite_requests WHERE move_plan_id = mp_id AND type = 'PhoneRequest') > 0 THEN
+  --       DELETE FROM movers_with_location WHERE movers_with_location.callback = false;
+  --     END IF;
+  --
+  --         --RAISE NO MOVER FOUND ERROR
+  --         IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+  --           RAISE EXCEPTION 'No movers can support onsite requests';
+  --         END IF;
+
+      --FILTER BY CRATING
+      IF num_crating > 0 THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.crating = false;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support crating';
+          END IF;
+
+      --FILTER BY DISSASEMBLY/ASSEMBLY
+      IF (SELECT count(*) FROM mp_ii WHERE assembly_required = TRUE) > 0 THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.disassembly_assembly = false;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support dissasembly/assembly';
+          END IF;
+
+      --FILTER BY WALL REMOVAL
+      IF (SELECT count(*) FROM mp_ii WHERE wall_removal_required = TRUE) > 0 THEN
+        DELETE FROM movers_with_location WHERE movers_with_location.wall_dismounting = false;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location) = 0 THEN
+            RAISE EXCEPTION 'No movers can support wall dismounting';
+          END IF;
+
+      --FILTER BY AVAILABILITY AND GET BALANCING RATE
+      DROP TABLE IF EXISTS movers_with_location_and_balancing_rate;
+      CREATE TEMP TABLE movers_with_location_and_balancing_rate AS (
+        SELECT * FROM
+          (SELECT
+            mwl.*,
+
+            --BALANCING RATE
+            COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary) AS balancing_rate_primary,
+            COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary) AS balancing_rate_secondary,
+
+            --AVAILABILITY CALCULATIONS
+            CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
+              CASE WHEN COALESCE(frz_daily.capacity_secondary, frz_weekly.capacity_secondary) IS NULL
+              THEN COALESCE(frz_daily.capacity_primary, frz_weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+              ELSE COALESCE(frz_daily.capacity_secondary, frz_weekly.capacity_secondary) - COALESCE(pm, 0)
+              END
+            ELSE
+              CASE WHEN COALESCE(daily.capacity_secondary, weekly.capacity_secondary) IS NULL
+              THEN COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+              ELSE COALESCE(daily.capacity_secondary, weekly.capacity_secondary) - COALESCE(pm, 0)
+              END
+            END AS net_pm,
+            CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
+              CASE WHEN COALESCE(frz_daily.capacity_secondary, frz_weekly.capacity_secondary) IS NULL
+              THEN COALESCE(frz_daily.capacity_primary, frz_weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+              ELSE COALESCE(frz_daily.capacity_primary, frz_weekly.capacity_primary) - COALESCE(am, 0)
+              END
+            ELSE
+              CASE WHEN COALESCE(daily.capacity_secondary, weekly.capacity_secondary) IS NULL
+              THEN COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0) - COALESCE(pm, 0)
+              ELSE COALESCE(daily.capacity_primary, weekly.capacity_primary) - COALESCE(am, 0)
+              END
+            END AS net_am,
+            CASE WHEN mwl.price_chart_id = frozen_pc_id THEN
+              CASE WHEN COALESCE(frz_daily_sit.capacity_secondary, frz_weekly_sit.capacity_secondary) IS NULL
+              THEN COALESCE(frz_daily_sit.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(sit_am, 0) - COALESCE(sit_pm, 0)
+              ELSE COALESCE(frz_daily_sit.capacity_primary, frz_weekly_sit.capacity_primary) - COALESCE(sit_am, 0)
+              END
+            ELSE
+              CASE WHEN COALESCE(daily_sit.capacity_secondary, weekly_sit.capacity_secondary) IS NULL
+              THEN COALESCE(daily_sit.capacity_primary, weekly_sit.capacity_primary) - COALESCE(sit_am, 0) - COALESCE(sit_pm, 0)
+              ELSE COALESCE(daily_sit.capacity_primary, weekly_sit.capacity_primary) - COALESCE(sit_am, 0)
+              END
+            END AS sit_avail
+          FROM movers_with_location as mwl
+
+          --ADJUSTMENTS BY DATE
+          LEFT JOIN(
+             SELECT *
+             FROM daily_adjustments AS day_adj
+             JOIN daily_adjustment_data AS adj_data
+               ON day_adj.daily_adjustment_datum_id = adj_data.id
+               AND day_adj.day = mov_date) AS daily
+             ON daily.price_chart_id = mwl.price_chart_id
+
+          --ADJUSTMENTS BY WEEKDAY
+          LEFT JOIN(SELECT *
+             FROM daily_adjustment_rules AS rul_adj
+             JOIN daily_adjustment_data AS adj_data
+               ON rul_adj.daily_adjustment_datum_id = adj_data.id
+               AND rul_adj.weekday =
+                 CASE WHEN EXTRACT(isodow FROM mov_date :: DATE) = 7 THEN
+                    0
+                  ELSE
+                    EXTRACT(isodow FROM mov_date :: DATE)
+                  END) AS weekly
+             ON weekly.price_chart_id = mwl.price_chart_id
+
+          --SIT ADJUSTMENTS BY DATE
+          LEFT JOIN(
+             SELECT *
+             FROM daily_adjustments AS day_adj
+             JOIN daily_adjustment_data AS adj_data
+               ON day_adj.daily_adjustment_datum_id = adj_data.id
+               AND day_adj.day = sit_date) AS daily_sit
+             ON daily_sit.price_chart_id = mwl.price_chart_id
+
+          --SIT ADJUSTMENTS BY WEEKDAY
+          LEFT JOIN(
+             SELECT *
+             FROM daily_adjustment_rules AS rul_adj
+             JOIN daily_adjustment_data AS adj_data
+               ON rul_adj.daily_adjustment_datum_id = adj_data.id
+               AND rul_adj.weekday =
+                CASE WHEN EXTRACT(isodow FROM sit_date  :: DATE) = 7 THEN
+                  0
+                ELSE
+                  EXTRACT(isodow FROM sit_date  :: DATE)
+                END) AS weekly_sit
+             ON weekly_sit.price_chart_id = mwl.price_chart_id
+
+          --ADJUSTMENTS BY DATE FOR FROZEN MOVER
+          LEFT JOIN(
+             SELECT *
+             FROM daily_adjustments AS day_adj
+             JOIN daily_adjustment_data AS adj_data
+               ON day_adj.daily_adjustment_datum_id = adj_data.id
+               AND day_adj.day = mov_date) AS frz_daily
+             ON frozen_pc_id = mwl.price_chart_id
+             AND frz_daily.price_chart_id = frozen_mover_latest_pc_id
+
+          --ADJUSTMENTS BY WEEKDAY FOR FROZEN MOVER
+          LEFT JOIN(SELECT *
+             FROM daily_adjustment_rules AS rul_adj
+             JOIN daily_adjustment_data AS adj_data
+               ON rul_adj.daily_adjustment_datum_id = adj_data.id
+               AND rul_adj.weekday =
+                 CASE WHEN EXTRACT(isodow FROM mov_date :: DATE) = 7 THEN
+                    0
+                  ELSE
+                    EXTRACT(isodow FROM mov_date :: DATE)
+                  END) AS frz_weekly
+             ON frozen_pc_id = mwl.price_chart_id
+             AND frz_weekly.price_chart_id = frozen_mover_latest_pc_id
+
+          --SIT ADJUSTMENTS BY DATE FOR FROZEN MOVER
+          LEFT JOIN(
+             SELECT *
+             FROM daily_adjustments AS day_adj
+             JOIN daily_adjustment_data AS adj_data
+               ON day_adj.daily_adjustment_datum_id = adj_data.id
+               AND day_adj.day = sit_date) AS frz_daily_sit
+             ON frozen_pc_id = mwl.price_chart_id
+             AND frz_daily_sit.price_chart_id = frozen_mover_latest_pc_id
+
+          --SIT ADJUSTMENTS BY WEEKDAY FOR FROZEN MOVER
+          LEFT JOIN(
+             SELECT *
+             FROM daily_adjustment_rules AS rul_adj
+             JOIN daily_adjustment_data AS adj_data
+               ON rul_adj.daily_adjustment_datum_id = adj_data.id
+               AND rul_adj.weekday =
+                CASE WHEN EXTRACT(isodow FROM sit_date  :: DATE) = 7 THEN
+                  0
+                ELSE
+                  EXTRACT(isodow FROM sit_date  :: DATE)
+                END) AS frz_weekly_sit
+             ON frozen_pc_id = mwl.price_chart_id
+             AND frz_weekly_sit.price_chart_id = frozen_mover_latest_pc_id
+
+          --MOVES BY MOVER ON MOVE DATE
+          LEFT JOIN(
+            SELECT
+              pc.mover_id,
+              move_date,
+              COUNT(CASE WHEN move_time NOT LIKE '%PM%' THEN move_time ELSE NULL END) AS am,
+              COUNT(CASE WHEN move_time LIKE '%PM%' THEN move_time ELSE NULL END) AS pm
+            FROM jobs AS jb
+            JOIN move_plans AS mp
+              ON mp.id = jb.move_plan_id
+              AND mover_state IN ('new', 'accepted', 'pending')
+              AND user_state <> 'cancelled'
+            JOIN price_charts AS pc
+              ON pc.id = jb.price_chart_id
+              GROUP BY move_date, pc.mover_id) AS jobs
+          ON mwl.mover_id = jobs.mover_id
+          AND mov_date = jobs.move_date
+
+          --MOVES BY MOVER ON SIT DATE
+          LEFT JOIN(
+            SELECT
+              pc.mover_id,
+              move_date,
+              COUNT(CASE WHEN move_time NOT LIKE '%PM%' THEN move_time ELSE NULL END) AS sit_am,
+              COUNT(CASE WHEN move_time LIKE '%PM%' THEN move_time ELSE NULL END) AS sit_pm
+            FROM jobs AS jb
+            JOIN move_plans AS mp
+              ON mp.id = jb.move_plan_id
+              AND mover_state IN ('new', 'accepted', 'pending')
+              AND user_state <> 'cancelled'
+            JOIN price_charts AS pc
+              ON pc.id = jb.price_chart_id
+              GROUP BY move_date, pc.mover_id) AS sit_jobs
+          ON mwl.mover_id = jobs.mover_id
+          AND sit_date = jobs.move_date
+          ) AS availability
+          WHERE
+          CASE
+            WHEN for_estimate = TRUE THEN
+              1=1
+            WHEN mov_time = 'am' THEN
+              availability.net_am > 0
+            ELSE
+              availability.net_pm > 0
+          END
+      );
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location_and_balancing_rate) = 0 THEN
+            RAISE EXCEPTION 'No movers are available on this move date';
+          END IF;
+
+        --FILTER BY SIT AVAILABILITY
+      IF sit_date IS NOT NULL AND for_estimate = false THEN
+        DELETE FROM movers_with_location_and_balancing_rate WHERE movers_with_location_and_balancing_rate.sit_avail <= 0;
+      END IF;
+
+          --RAISE NO MOVER FOUND ERROR
+          IF (SELECT COUNT(*) FROM movers_with_location_and_balancing_rate) = 0 THEN
+            RAISE EXCEPTION 'No movers are available on this storage move out date';
+          END IF;
+    END IF;
 
 
     --PRECOMPUTE TRAVEL PLAN
@@ -1047,18 +1111,18 @@ DECLARE
 
     -- LOOP THROUGH FLOAT ARRAY AND UPDATE BASE COLUMN FOR BETTER RECACHE AND RERUN FEEDBACK
     FOR tp IN SELECT * FROM travel_plan_miles
-		LOOP
-			UPDATE travel_plan_miles SET
-			distance_minus_free = greatest((SELECT
-				sum(unnested.unnest)
-				FROM
-				(SELECT unnest(tp.distance_minus_free_array)) as unnested), 0.00),
-			recache_and_rerun = (SELECT
-				string_agg(coalesce(to_char(unnested.unnest,'9D9'),'NULL'), ',') LIKE '%NULL%' as test
-				FROM
-				(SELECT unnest(tp.distance_minus_free_array)) as unnested)
-			WHERE travel_plan_miles.latest_pc_id = tp.latest_pc_id;
-		END LOOP;
+    LOOP
+      UPDATE travel_plan_miles SET
+      distance_minus_free = greatest((SELECT
+        sum(unnested.unnest)
+        FROM
+        (SELECT unnest(tp.distance_minus_free_array)) as unnested), 0.00),
+      recache_and_rerun = (SELECT
+        string_agg(coalesce(to_char(unnested.unnest,'9D9'),'NULL'), ',') LIKE '%NULL%' as test
+        FROM
+        (SELECT unnest(tp.distance_minus_free_array)) as unnested)
+      WHERE travel_plan_miles.latest_pc_id = tp.latest_pc_id;
+    END LOOP;
 
     --CRATING COST BY PRICE_CHART
     DROP TABLE IF EXISTS crating_cost_pc;
@@ -1274,7 +1338,7 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
           2) AS travel_cost_adjusted,
 
         --ADD RECACHE AND RERUN COLUMN FOR ESTIMATE MODEL
-						travel_plan_miles.recache_and_rerun as recache_and_rerun,
+            travel_plan_miles.recache_and_rerun as recache_and_rerun,
 
         --SPECIAL HANDLING COST ADJUSTED
 
@@ -1487,25 +1551,25 @@ FROM admin_adjustments WHERE planable_id = mp_id AND planable_type = 'MovePlan'
 );
 
 IF
-	(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = true) > 0
-	AND for_estimate = true
-	AND (SELECT count(*) FROM movers_and_pricing_subtotal) = 1
+  (SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = true) > 0
+  AND for_estimate = true
+  AND (SELECT count(*) FROM movers_and_pricing_subtotal) = 1
 THEN
-	new_sub := (SELECT movers_and_pricing_subtotal.subtotal FROM movers_and_pricing_subtotal LIMIT 1);
-	FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = TRUE ORDER BY created_at ASC
-	LOOP
-		IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
-			UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * new_sub) WHERE id = adj.id;
-			before_adj := before_adj + (adj.percentage * new_sub)/100.00;
-			new_sub := new_sub + (adj.percentage * new_sub)/100.00;
-		ELSE
-			before_adj := before_adj + adj.amount_in_cents/100.00;
-			new_sub := new_sub + adj.amount_in_cents/100.00;
-		END IF;
-		RAISE NOTICE '%', before_adj;
-	END LOOP;
-	UPDATE movers_and_pricing_subtotal SET subtotal = new_sub;
-	UPDATE movers_and_pricing_subtotal SET adj_before = before_adj;
+  new_sub := (SELECT movers_and_pricing_subtotal.subtotal FROM movers_and_pricing_subtotal LIMIT 1);
+  FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = TRUE ORDER BY created_at ASC
+  LOOP
+    IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
+      UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * new_sub) WHERE id = adj.id;
+      before_adj := before_adj + (adj.percentage * new_sub)/100.00;
+      new_sub := new_sub + (adj.percentage * new_sub)/100.00;
+    ELSE
+      before_adj := before_adj + adj.amount_in_cents/100.00;
+      new_sub := new_sub + adj.amount_in_cents/100.00;
+    END IF;
+    RAISE NOTICE '%', before_adj;
+  END LOOP;
+  UPDATE movers_and_pricing_subtotal SET subtotal = new_sub;
+  UPDATE movers_and_pricing_subtotal SET adj_before = before_adj;
 END IF;
 
 DROP TABLE IF EXISTS movers_and_pricing;
@@ -1598,62 +1662,62 @@ CREATE TEMP TABLE movers_and_pricing AS (
 
 IF for_estimate = true AND (SELECT count(*) FROM movers_and_pricing) = 1 THEN
 
-	new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
+  new_total := (SELECT movers_and_pricing.total FROM movers_and_pricing LIMIT 1);
 
-	IF
-		(SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both') > 0
-		AND for_estimate = true
-		AND (SELECT count(*) FROM movers_and_pricing) = 1
-	THEN
-		FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both' ORDER BY created_at ASC
-		LOOP
-			IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
-				UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * new_total) WHERE id = adj.id;
-				after_adj := after_adj + (adj.percentage * new_total)/100.00;
-				new_total := new_total + (adj.percentage * new_total)/100.00;
-			ELSE
-				after_adj := after_adj + adj.amount_in_cents/100.00;
-				new_total := new_total + adj.amount_in_cents/100.00;
-			END IF;
-			RAISE NOTICE 'after_adj = %', after_adj;
-		END LOOP;
-		UPDATE movers_and_pricing SET total = new_total;
-		UPDATE movers_and_pricing SET total_adjustments = before_adj + after_adj;
-	END IF;
+  IF
+    (SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both') > 0
+    AND for_estimate = true
+    AND (SELECT count(*) FROM movers_and_pricing) = 1
+  THEN
+    FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to = 'both' ORDER BY created_at ASC
+    LOOP
+      IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
+        UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * new_total) WHERE id = adj.id;
+        after_adj := after_adj + (adj.percentage * new_total)/100.00;
+        new_total := new_total + (adj.percentage * new_total)/100.00;
+      ELSE
+        after_adj := after_adj + adj.amount_in_cents/100.00;
+        new_total := new_total + adj.amount_in_cents/100.00;
+      END IF;
+      RAISE NOTICE 'after_adj = %', after_adj;
+    END LOOP;
+    UPDATE movers_and_pricing SET total = new_total;
+    UPDATE movers_and_pricing SET total_adjustments = before_adj + after_adj;
+  END IF;
 
-	IF (SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both') > 0 THEN
-		unpakt_fee_sub := new_total;
-		mover_cut_sub := new_total;
-		FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both' ORDER BY created_at ASC
-		LOOP
-			IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
-				IF adj.applies_to = 'mover_fee' THEN
-					UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * mover_cut_sub) WHERE id = adj.id;
-					mover_cut_adj := mover_cut_adj + (adj.percentage * mover_cut_sub)/100.00;
-					mover_cut_sub := mover_cut_sub + (adj.percentage * mover_cut_sub)/100.00;
-				ELSEIF adj.applies_to = 'unpakt_fee' THEN
-					UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * unpakt_fee_sub) WHERE id = adj.id;
-					unpakt_fee_adj := unpakt_fee_adj + (adj.percentage * unpakt_fee_sub)/100.00;
-					unpakt_fee_sub := unpakt_fee_sub + (adj.percentage * unpakt_fee_sub)/100.00;
-				END IF;
-			ELSE
-				IF adj.applies_to = 'mover_fee' THEN
-					mover_cut_adj := mover_cut_adj + adj.amount_in_cents/100.00;
-					mover_cut_sub := mover_cut_sub + adj.amount_in_cents/100.00;
-				ELSEIF adj.applies_to = 'unpakt_fee' THEN
-					unpakt_fee_adj := unpakt_fee_adj + adj.amount_in_cents/100.00;
-					unpakt_fee_sub := unpakt_fee_sub + adj.amount_in_cents/100.00;
-				END IF;
-			END IF;
-			RAISE NOTICE 'mover_adj = %', mover_cut_adj;
-			RAISE NOTICE 'unpakt_adj = %', unpakt_fee_adj;
-		END LOOP;
-	END IF;
-	UPDATE movers_and_pricing SET
-		total = mp.total + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
-	  total_adjustments = mp.total_adjustments + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
-	  mover_cut = (((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + COALESCE(mover_cut_adj,0.00)),
-	  unpakt_fee = (((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + COALESCE(unpakt_fee_adj,0.00))
+  IF (SELECT count(*) FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both') > 0 THEN
+    unpakt_fee_sub := new_total;
+    mover_cut_sub := new_total;
+    FOR adj IN SELECT * FROM mp_admin_adjustments WHERE is_applied_before_discounts = false AND applies_to <> 'both' ORDER BY created_at ASC
+    LOOP
+      IF adj.percentage <> 0 AND adj.percentage IS NOT NULL THEN
+        IF adj.applies_to = 'mover_fee' THEN
+          UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * mover_cut_sub) WHERE id = adj.id;
+          mover_cut_adj := mover_cut_adj + (adj.percentage * mover_cut_sub)/100.00;
+          mover_cut_sub := mover_cut_sub + (adj.percentage * mover_cut_sub)/100.00;
+        ELSEIF adj.applies_to = 'unpakt_fee' THEN
+          UPDATE admin_adjustments SET amount_in_cents = (adj.percentage * unpakt_fee_sub) WHERE id = adj.id;
+          unpakt_fee_adj := unpakt_fee_adj + (adj.percentage * unpakt_fee_sub)/100.00;
+          unpakt_fee_sub := unpakt_fee_sub + (adj.percentage * unpakt_fee_sub)/100.00;
+        END IF;
+      ELSE
+        IF adj.applies_to = 'mover_fee' THEN
+          mover_cut_adj := mover_cut_adj + adj.amount_in_cents/100.00;
+          mover_cut_sub := mover_cut_sub + adj.amount_in_cents/100.00;
+        ELSEIF adj.applies_to = 'unpakt_fee' THEN
+          unpakt_fee_adj := unpakt_fee_adj + adj.amount_in_cents/100.00;
+          unpakt_fee_sub := unpakt_fee_sub + adj.amount_in_cents/100.00;
+        END IF;
+      END IF;
+      RAISE NOTICE 'mover_adj = %', mover_cut_adj;
+      RAISE NOTICE 'unpakt_adj = %', unpakt_fee_adj;
+    END LOOP;
+  END IF;
+  UPDATE movers_and_pricing SET
+    total = mp.total + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
+    total_adjustments = mp.total_adjustments + COALESCE(mover_cut_adj,0.00) + COALESCE(unpakt_fee_adj,0.00),
+    mover_cut = (((mp.subtotal + after_adj)*(1 - (commission/100.00))) + mp.mover_special_discount + COALESCE(mover_cut_adj,0.00)),
+    unpakt_fee = (((mp.subtotal + after_adj)*(commission/100.00)) + mp.coupon_discount + mp.twitter_discount + mp.facebook_discount + COALESCE(unpakt_fee_adj,0.00))
   FROM movers_and_pricing AS mp;
 END IF;
 
@@ -1662,140 +1726,3 @@ RETURN QUERY SELECT * FROM movers_and_pricing ORDER BY (
 ) ASC;
 END; $$
 LANGUAGE plpgsql;
-
-
-DROP FUNCTION IF EXISTS comparison_presenter_v4(VARCHAR,INT[],BOOLEAN);
-CREATE FUNCTION comparison_presenter_v4(move_plan_param VARCHAR, mover_param INTEGER[] DEFAULT NULL, select_from_temp BOOLEAN DEFAULT false)
-  RETURNS TABLE(
-  branch_property_id integer,
-  city_state_label varchar,
-  consult_only boolean,
-  dedicated boolean,
-  maximum_delivery_days integer,
-  minimum_delivery_days integer,
-  grade numeric,
-  id integer,
-  is_featured boolean,
-  logo_url varchar,
-  mover_special numeric,
-  mover_special_percentage integer,
-  name varchar,
-  number_of_employees integer,
-  number_of_trucks integer,
-  moving numeric,
-  packing_cost numeric,
-  special_handling_cost numeric,
-  storage_cost numeric,
-  profile_path varchar,
-  google_link varchar,
-  google_number_of_reviews integer,
-  google_rating numeric,
-  google_rounded_rating numeric,
-  unpakt_link varchar,
-  unpakt_number_of_reviews integer,
-  unpakt_rating numeric,
-  unpakt_rounded_rating numeric,
-  yelp_link varchar,
-  yelp_number_of_reviews integer,
-  yelp_rating numeric,
-  yelp_rounded_rating numeric,
-  slug varchar,
-  total_cost numeric,
-  requested_discoun numeric,
-  years_in_business integer,
-  estimate_moving numeric,
-  estimate_travel numeric,
-  estimate_special_handling numeric,
-  estimate_storage numeric,
-  estimate_cardboard numeric,
-  estimate_surcharge_cubic_feet numeric,
-  estimate_coi_charges numeric,
-  estimate_size_surcharge numeric,
-  estimate_long_distance boolean
-  ) AS
-$func$
-BEGIN
-RETURN QUERY
-(SELECT
-  uniq.branch_property_id, uniq.city_state_label, uniq.consult_only, uniq.dedicated,
-  uniq.maximum_delivery_days, uniq.minimum_delivery_days,	uniq.grade, uniq.id,
-  uniq.is_featured, uniq.logo_url, uniq.mover_special, uniq.mover_special_percentage, uniq.name, uniq.number_of_employees,
-  uniq.number_of_trucks, uniq.moving, uniq.packing_cost, uniq.special_handling_cost,
-  uniq.storage_cost, uniq.profile_path, uniq.google_link, uniq.google_number_of_reviews,
-  uniq.google_rating, uniq.google_rounded_rating, uniq.unpakt_link, uniq.unpakt_number_of_reviews,
-  uniq.unpakt_rating, uniq.unpakt_rounded_rating, uniq.yelp_link, uniq.yelp_number_of_reviews,
-  uniq.yelp_rating, uniq.yelp_rounded_rating, uniq.slug, uniq.total_cost, uniq.requested_discount, uniq.years_in_business,
-  uniq.estimate_moving, uniq.estimate_travel, uniq.estimate_special_handling, uniq.estimate_storage,uniq.estimate_cardboard,
-  uniq.estimate_surcharge_cubic_feet, uniq.estimate_coi_charges, uniq.estimate_size_surcharge, uniq.estimate_long_distance
-FROM
-  (SELECT
-    *,
-    ROW_NUMBER() OVER(PARTITION BY all_lines.vendor_id ORDER BY all_lines.distance_to_pu ASC) as rank
-  FROM
-    (SELECT DISTINCT
-        bp.id AS branch_property_id,
-        CAST(ba.city || ', ' || ba.state AS VARCHAR) AS city_state_label,
-        (CASE WHEN pricing.location_type = 'local' THEN
-          pricing.local_consult_only
-        ELSE
-          pricing.interstate_consult_only
-        END) AS consult_only,
-        COALESCE(pricing.dedicated, 'f') as dedicated,
-        pricing.maximum_delivery_days,
-        pricing.minimum_delivery_days,
-        ROUND(movers.numeric_grade + 78) AS grade,
-        movers.id,
-        movers.is_featured,
-        bp.logo_image AS logo_url,
-        -1.00 * pricing.mover_special_discount AS mover_special,
-        pricing.mover_special_percentage AS mover_special_percentage,
-        COALESCE(bp.trade_name,bp.name) AS name,
-        bp.vendor_id,
-        movers.number_of_employees,
-        movers.number_of_trucks,
-        pricing.moving_cost_adjusted AS moving,
-        pricing.packing_cost_adjusted AS packing_cost,
-        pricing.special_handling_cost_adjusted AS special_handling_cost,
-        pricing.storage_cost AS storage_cost,
-        bp.slug AS profile_path,
-        google.link AS google_link,
-        google.number_of_reviews AS google_number_of_reviews,
-        CAST(google.rating AS NUMERIC) AS google_rating,
-        ROUND(ROUND(CAST(google.rating AS numeric) * 2.00)/2,1) AS google_rounded_rating,
-        unpakt.link AS unpakt_link,
-        unpakt.number_of_reviews AS unpakt_number_of_reviews,
-        CAST(unpakt.rating AS NUMERIC) AS unpakt_rating,
-        ROUND(ROUND(CAST(unpakt.rating AS numeric) * 2.00)/2,1) AS unpakt_rounded_rating,
-        yelp.link AS yelp_link,
-        yelp.number_of_reviews AS yelp_number_of_reviews,
-        CAST(yelp.rating AS NUMERIC) AS yelp_rating,
-        ROUND(ROUND(CAST(yelp.rating AS numeric) * 2.00)/2,1) AS yelp_rounded_rating,
-        bp.slug AS slug,
-        pricing.total AS total_cost,
-        pricing.requested_discount AS requested_discount,
-        pricing.distance_to_pu AS distance_to_pu,
-        CAST(GREATEST((DATE_PART('year',now()) - COALESCE(bp.year_founded,DATE_PART('year',now()))),1) AS INTEGER) AS years_in_business,
-        pricing.moving_cost_adjusted AS estimate_moving,
-        pricing.travel_cost_adjusted AS estimate_travel,
-        pricing.special_handling_cost_adjusted as estimate_special_handling,
-        pricing.storage_cost AS estimate_storage,
-        pricing.cardboard_cost_adjusted AS estimate_cardboard,
-        pricing.surcharge_cubic_feet_cost_adjusted AS estimate_surcharge_cubic_feet,
-        pricing.coi_charges_cost AS estimate_coi_charges,
-        pricing.size_surcharge_cost_adjusted AS estimate_size_surcharge,
-        case pricing.location_type
-          WHEN 'local' THEN false
-          else TRUE
-        END as estimate_long_distance
-        FROM filtered_movers_with_pricing(move_plan_param,mover_param,select_from_temp) AS pricing
-        JOIN movers ON movers.id = pricing.mover_id
-        JOIN branch_properties AS bp ON bp.branchable_id = movers.id AND branchable_type = 'Mover'
-        JOIN base_addresses AS ba ON bp.id = ba.branch_property_id
-        JOIN service_provider_ratings AS yelp ON yelp.service_provider_id = movers.id AND yelp.service_provider_type = 'Mover'AND yelp.reviewer = 'Yelp'
-        JOIN service_provider_ratings AS google ON google.service_provider_id = movers.id AND google.service_provider_type = 'Mover'AND google.reviewer = 'Google'
-        JOIN service_provider_ratings AS unpakt ON unpakt.service_provider_id = movers.id AND unpakt.service_provider_type = 'Mover'AND unpakt.reviewer = 'Unpakt'
-    ) as all_lines
-  ) as uniq WHERE uniq.rank = 1 ORDER BY total_cost ASC
-);
-END
-$func$ LANGUAGE plpgsql;
