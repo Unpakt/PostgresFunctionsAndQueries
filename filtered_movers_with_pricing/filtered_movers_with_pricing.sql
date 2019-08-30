@@ -139,6 +139,7 @@ DECLARE
     mover_cut_sub := 0.00;
     unpakt_fee_adj := 0.00;
     mover_cut_adj := 0.00;
+
       --FIND MOVE PLAN INVENTORY ITEMS
       DROP TABLE IF EXISTS mp_ii;
       CREATE TEMP TABLE mp_ii AS (
@@ -177,7 +178,7 @@ DECLARE
         AND mpbp.box_type_id = bt.id
         AND quantity > 0);
 
-			--MDA ESTIMATE
+			--MDA ITEM CHANGES
 			IF mda_price = true THEN
 				--MDA ITEMS
         DROP TABLE IF EXISTS mda_ii;
@@ -345,6 +346,31 @@ DECLARE
         (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_pick_up' LIMIT 1) UNION ALL
         (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'drop_off' LIMIT 1) UNION ALL
         (SELECT * FROM addresses WHERE move_plan_id = mp_id AND geocoded_address IS NOT NULL AND role_in_plan = 'extra_drop_off' LIMIT 1);
+
+			--MDA ADDRESS CHANGES
+			IF mda_price = true THEN
+				UPDATE mp_addresses
+					SET height_id = COALESCE(
+						(SELECT pick_up_height_id FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1),
+						(SELECT height_id FROM mp_addresses where role_in_plan = 'pick_up' LIMIT 1))
+				WHERE role_in_plan = 'pick_up';
+				UPDATE mp_addresses
+					SET height_id = COALESCE(
+						(SELECT extra_pick_up_height_id FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1),
+						(SELECT height_id FROM mp_addresses where role_in_plan = 'extra_pick_up' LIMIT 1))
+				WHERE role_in_plan = 'extra_pick_up';
+				UPDATE mp_addresses
+					SET height_id = COALESCE(
+						(SELECT drop_off_height_id FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1),
+						(SELECT height_id FROM mp_addresses where role_in_plan = 'drop_off' LIMIT 1))
+				WHERE role_in_plan = 'drop_off';
+				UPDATE mp_addresses
+					SET height_id = COALESCE(
+						(SELECT drop_off_height_id FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1),
+						(SELECT height_id FROM mp_addresses where role_in_plan = 'extra_drop_off' LIMIT 1))
+				WHERE role_in_plan = 'extra_drop_off';
+			END IF;
+
 
       --HANDLE WAREHOSUE DESTINATIONS
       IF (SELECT warehouse_destination FROM mp) = TRUE THEN
