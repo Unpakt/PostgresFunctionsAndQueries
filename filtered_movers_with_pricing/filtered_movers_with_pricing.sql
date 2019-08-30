@@ -101,7 +101,7 @@ DECLARE
     DROP TABLE IF EXISTS mp;
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     commission := (SELECT estimate_commission_rate FROM mp);
-    booked_date := (SELECT jobs.created_at FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = mp_id LIMIT 1);
+    booked_date := (SELECT jobs.created_at FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = (SELECT id from mp) LIMIT 1);
     white_label_movers := (SELECT array_agg(white_label_whitelists.mover_id) FROM white_label_whitelists WHERE white_label_id = (SELECT white_label_id FROM mp));
     frozen_pc_id := COALESCE(
       reschedule_pc_id,
@@ -179,14 +179,13 @@ DECLARE
 
 			--MDA ESTIMATE
 			IF mda_price = true THEN
-
 				--MDA ITEMS
         DROP TABLE IF EXISTS mda_ii;
         CREATE TEMP TABLE mda_ii AS (
         SELECT
 					*
-				FROM jsonb_to_recordset((SELECT item_json FROM move_day_adjustments LIMIT 1))
-				AS json(item_id int, group_id int, amount_changed int)
+				FROM jsonb_to_recordset((SELECT item_json FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1))
+				AS json(item_id int, amount_changed int, group_id int, room_id int)
 				JOIN inventory_items
 				ON item_id = inventory_items.id);
 
@@ -195,7 +194,7 @@ DECLARE
 				CREATE TEMP TABLE mda_bi AS (
 				SELECT
 					*
-				FROM jsonb_to_recordset((SELECT box_json FROM move_day_adjustments LIMIT 1))
+				FROM jsonb_to_recordset((SELECT box_json FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1))
 				AS json(box_type_id int, amount_changed int)
 				JOIN box_types
 				ON box_type_id = box_types.id);
@@ -206,11 +205,11 @@ DECLARE
 				SELECT
 					json.*,
 					1 as item_group_id,
-					inventory_items.*
-				FROM jsonb_to_recordset((SELECT custom_json FROM move_day_adjustments LIMIT 1))
-				AS json(new_id text, length int, new_name text, width int, height int ,new_cubic_feet numeric, new_description text, amount_changed int)
+					inventory_items.id as existing_id
+				FROM jsonb_to_recordset((SELECT custom_json FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1))
+				AS json(id text, length int, name text, width int, height int ,cubic_feet numeric, description text, amount_changed int)
 				LEFT JOIN inventory_items
-				ON json.new_id::text = inventory_items.id::text);
+				ON json.id::text = inventory_items.id::text);
 
 				FOR mda_add_ii in SELECT * FROM mda_ii where amount_changed > 0
 				LOOP
@@ -250,11 +249,66 @@ DECLARE
 					END LOOP;
 				END LOOP;
 
--- 							SELECT * FROM mda_ii where amount_changed < 0;
--- 							SELECT * FROM mda_bi WHERE amount_changed > 0;
--- 							SELECT * FROM mda_bi WHERE amount_changed < 0;
--- 							SELECT * FROM mda_ci WHERE amount_changed > 0;
--- 							SELECT * FROM mda_ci WHERE amount_changed < 0;
+				FOR mda_add_bi in SELECT * FROM mda_bi where amount_changed > 0
+				LOOP
+						IF (SELECT count(*) FROM mp_bi where mda_add_bi.box_type_id = mp_bi.box_type_id) > 0 THEN
+							UPDATE mp_bi SET quantity = quantity + mda_add_bi.amount_changed WHERE mda_add_bi.box_type_id = mp_bi.box_type_id;
+						ELSE
+							INSERT INTO mp_bi SELECT
+							(SELECT max(mpbi_id) + 1 FROM mp_bi) AS mpbi_id,
+							(SELECT id FROM mp) AS move_plan_id,
+							mda_add_bi.box_type_id as box_type_id,
+							mda_add_bi.amount_changed as quantity,
+							mda_add_bi.cubic_feet;
+						END IF;
+				END LOOP;
+
+				FOR mda_sub_bi in SELECT * FROM mda_bi where amount_changed < 0
+				LOOP
+						IF (SELECT quantity + mda_sub_bi.amount_changed FROM mp_bi where mda_sub_bi.box_type_id = mp_bi.box_type_id) > 0 THEN
+							UPDATE mp_bi SET quantity = quantity + mda_sub_bi.amount_changed WHERE mda_sub_bi.box_type_id = mp_bi.box_type_id;
+						ELSE
+							DELETE FROM mp_bi WHERE mda_sub_bi.box_type_id = mp_bi.box_type_id;
+						END IF;
+				END LOOP;
+
+				FOR mda_add_ci in SELECT * FROM mda_ci where amount_changed > 0
+				LOOP
+					num_added := 0;
+					WHILE num_added < mda_add_ci.amount_changed LOOP
+						num_added := num_added + 1;
+						INSERT INTO mp_ii SELECT
+							(SELECT max(mpii_id) FROM mp_ii) + 1 as mpii_id,
+							(SELECT id FROM mp) AS move_plan_id,
+							(SELECT max(inventory_item_id) FROM mp_ii) + 1 as inventory_item_id,
+							1 as item_group_id,
+							false as assembly_required,
+							false as wall_removal_required,
+							false as crating_required,
+							true as is_user_selected,
+							false as requires_piano_services,
+	            mda_add_ci.name as item_name,
+	            'inventory_icons-default_icon' as icon_css_class,
+	            mda_add_ci.cubic_feet,
+	            true as is_user_generated,
+	            mda_add_ci.description;
+					END LOOP;
+				END LOOP;
+
+				FOR mda_sub_ci in SELECT * FROM mda_ci where amount_changed < 0
+				LOOP
+					num_removed := 0;
+					WHILE num_removed > mda_sub_ci.amount_changed LOOP
+						num_removed := num_removed - 1;
+						DELETE from mp_ii
+						WHERE mpii_id = (
+							SELECT mpii_id
+							WHERE inventory_item_id = mda_sub_ci.existing_id
+							AND item_group_id = mda_sub_ci.item_group_id
+							ORDER BY mpii_id DESC LIMIT 1
+							);
+					END LOOP;
+				END LOOP;
 
 			END IF;
 
