@@ -366,7 +366,7 @@ DECLARE
 				WHERE role_in_plan = 'drop_off';
 				UPDATE mp_addresses
 					SET height_id = COALESCE(
-						(SELECT drop_off_height_id FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1),
+						(SELECT extra_drop_off_height_id FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1),
 						(SELECT height_id FROM mp_addresses where role_in_plan = 'extra_drop_off' LIMIT 1))
 				WHERE role_in_plan = 'extra_drop_off';
 			END IF;
