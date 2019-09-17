@@ -1432,8 +1432,8 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
 
            --CARPENTRY COST
            (CASE
-           WHEN mda_price = true THEN
-             COALESCE((minimum_carpentry_cost_per_hour_in_cents / 100.00 * MAX(price_charts.special_handling_hours,(SELECT special_handling_hours FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1))),0.00)
+           WHEN mda_price = true AND (SELECT special_handling_hours::NUMERIC FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1) > 0 THEN
+             COALESCE((minimum_carpentry_cost_per_hour_in_cents / 100.00 * greatest(price_charts.special_handling_hours::NUMERIC,(SELECT special_handling_hours::NUMERIC FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1))),0.00)
            WHEN num_carpentry > 0 THEN
              COALESCE((minimum_carpentry_cost_per_hour_in_cents / 100.00 * price_charts.special_handling_hours),0.00)
            ELSE
