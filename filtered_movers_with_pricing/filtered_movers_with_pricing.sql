@@ -1276,6 +1276,11 @@ DECLARE
       COALESCE(daily.balancing_rate_primary, weekly.balancing_rate_primary),
       COALESCE(daily.balancing_rate_secondary, weekly.balancing_rate_secondary));
 
+		--PACKING/UNPACKING MDA
+		IF mda_price = true THEN
+			UPDATE mp SET follow_up_packing_service_id = (SELECT packing_service_id FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1);
+		END IF;
+
     --PACKING/UNPACKING COST BY PRICE_CHART
     DROP TABLE IF EXISTS packing_service_cost_pc;
     CREATE TEMP TABLE packing_service_cost_pc AS (SELECT
@@ -1426,12 +1431,15 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
            ROUND((COALESCE(crating_cost,0.00)  +
 
            --CARPENTRY COST
-           (CASE WHEN num_carpentry > 0 THEN
+           (CASE
+           WHEN mda_price = true THEN
+             COALESCE((minimum_carpentry_cost_per_hour_in_cents / 100.00 * MAX(price_charts.special_handling_hours,(SELECT special_handling_hours FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1))),0.00)
+           WHEN num_carpentry > 0 THEN
              COALESCE((minimum_carpentry_cost_per_hour_in_cents / 100.00 * price_charts.special_handling_hours),0.00)
            ELSE
              0.00
-           END
-           ))* balancing_rate.rate, 2) AS special_handling_cost_adjusted,
+           END)
+           )* balancing_rate.rate, 2) AS special_handling_cost_adjusted,
 
         --STORAGE COST ADJUSTED
           ROUND(
