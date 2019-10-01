@@ -62,6 +62,7 @@ DECLARE box_dow integer;DECLARE box_date date;DECLARE box_cubic_feet numeric;
 DECLARE frozen_pc_id integer; DECLARE frozen_mover_id integer;
 DECLARE frozen_mover_latest_pc_id integer; DECLARE white_label_movers int[];
 DECLARE commission numeric; DECLARE booked_date date;
+DECLARE mda_special_handling_hours NUMERIC;
 
 --DEFINE VARIABLES: PICKUP(pu_), EXTRA PICK UP(epu_), DROP OFF(do_), EXTRA DROP OFF(edo_)
 DECLARE pu_state varchar; DECLARE pu_earth earth; DECLARE pu_key varchar;
@@ -102,6 +103,8 @@ DECLARE
     CREATE TEMP TABLE mp AS (SELECT * FROM move_plans WHERE move_plans.id = mp_id);
     commission := (SELECT estimate_commission_rate FROM mp);
     booked_date := (SELECT jobs.created_at FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = (SELECT id from mp) LIMIT 1);
+    mda_special_handling_hours := coalesce((SELECT jobs.mda_special_handling_hours FROM jobs WHERE mover_state <> 'declined' AND user_state NOT in('reserved_cancelled', 'cancelled') AND move_plan_id = (SELECT id from mp) LIMIT 1),0.00);
+
     white_label_movers := (SELECT array_agg(white_label_whitelists.mover_id) FROM white_label_whitelists WHERE white_label_id = (SELECT white_label_id FROM mp));
     frozen_pc_id := COALESCE(
       reschedule_pc_id,
@@ -1434,8 +1437,8 @@ CREATE TEMP TABLE movers_and_pricing_subtotal AS (
            (CASE
            WHEN mda_price = true AND (SELECT special_handling_hours::NUMERIC FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1) > 0 THEN
              COALESCE((minimum_carpentry_cost_per_hour_in_cents / 100.00 * greatest(price_charts.special_handling_hours::NUMERIC,(SELECT special_handling_hours::NUMERIC FROM move_day_adjustments WHERE move_day_adjustments.move_plan_id = (SELECT id from mp) LIMIT 1))),0.00)
-           WHEN num_carpentry > 0 THEN
-             COALESCE((minimum_carpentry_cost_per_hour_in_cents / 100.00 * price_charts.special_handling_hours),0.00)
+           WHEN (num_carpentry > 0) OR (mda_special_handling_hours > 0.00) THEN
+             COALESCE(minimum_carpentry_cost_per_hour_in_cents / 100.00 * greatest(price_charts.special_handling_hours::NUMERIC, mda_special_handling_hours),0.00)
            ELSE
              0.00
            END)
