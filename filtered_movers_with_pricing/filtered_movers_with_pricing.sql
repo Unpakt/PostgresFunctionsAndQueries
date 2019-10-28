@@ -396,7 +396,7 @@ DECLARE
         JOIN heights
           ON mp_addresses.height_id = heights.id
           AND mp_addresses.move_plan_id = mp_id
-          AND mp_addresses.role_in_plan IN ('drop_off', 'pick_up') ) as stairs);
+          AND mp_addresses.role_in_plan IN ('drop_off', 'pick_up','extra_pick_up','extra_drop_off') ) as stairs);
       pu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'pick_up');
       epu_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'extra_pick_up');
       do_state := (SELECT state FROM mp_addresses WHERE role_in_plan = 'drop_off');
